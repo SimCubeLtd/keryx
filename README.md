@@ -1,0 +1,135 @@
+# Keryx
+
+**Keryx** (Greek **κῆρυξ**, pronounced **KEH-riks** — /ˈkɛrɪks/) is a
+self-hosted publishing service for agents: server, CLI, and TUI in a single
+Rust binary. An agent hands Keryx a static HTML document — a plan, proposal,
+brief, or report — and Keryx proclaims it at a URL that serves the exact
+uploaded bytes to every client: browsers, `curl`, and agent fetch tools alike.
+
+## Why "Keryx"?
+
+In the ancient Greek world the *kēryx* was the herald. Under the protection of
+Hermes and carrying the *kerykeion* (the herald's staff, better known by its
+Latin name, the caduceus), heralds were inviolable: they crossed battle lines
+untouched, convened assemblies, and delivered proclamations between kings,
+armies, and gods. Homer's heralds — Talthybius for Agamemnon, Eurybates for
+Odysseus — were trusted to carry a message faithfully and repeat it exactly as
+given, word for word.
+
+That is precisely the contract this tool makes. Your agents compose the
+message; Keryx carries it and repeats it byte for byte — no wrapper pages, no
+rewriting, no consent interstitials — to whoever holds the URL.
+
+## What it does
+
+- **Publish** — `keryx upload plan.html` returns a public URL and a raw URL.
+  Re-uploading the same file adds a new version; old versions stay
+  addressable at `/d/<id>/v/<n>`.
+- **Serve** — every draft URL returns the exact uploaded HTML with a strict
+  Content-Security-Policy and `X-Keryx-Draft-Id` / `X-Keryx-Draft-Version`
+  headers. The CSP never alters the bytes; it only constrains what the page
+  may do in a browser (no script execution, no network, no form posts).
+- **Browse** — a server-rendered dashboard at `/`, a `keryx list` command, and
+  a full TUI (`keryx tui`) for browsing, opening, and deleting drafts.
+- **Stay small** — one binary, a SQLite index for metadata (default
+  `~/.keryx/keryx.db`), and the HTML stored as plain files on disk (default
+  `~/.keryx/drafts/<draft-id>/<version-id>.html`) — easy to inspect, grep,
+  and back up. No external database, no object storage, no OAuth. A single
+  optional API key covers the private bits.
+
+## Build
+
+```sh
+cargo build --release   # produces target/release/keryx
+```
+
+## Server
+
+```sh
+keryx serve
+```
+
+| Flag / env | Default | Purpose |
+| --- | --- | --- |
+| `--port` / `KERYX_PORT` | `7812` | Listen port |
+| `--host` / `KERYX_HOST` | `127.0.0.1` | Bind address |
+| `--db` / `KERYX_DB` | `~/.keryx/keryx.db` | SQLite path (metadata index) |
+| `--data-dir` / `KERYX_DATA_DIR` | `~/.keryx` | Root for stored HTML files (written under `drafts/`) |
+| `--public-base-url` / `KERYX_PUBLIC_BASE_URL` | request Host header | Base for returned links |
+| `--api-key` / `KERYX_API_KEY` | unset (open) | Require this Bearer key for mutations/listings |
+| `--max-html-bytes` / `KERYX_MAX_HTML_BYTES` | `524288` | Upload size cap |
+
+With `KERYX_API_KEY` set, uploads, listings, and deletes require the key as a
+Bearer token; draft serving stays public. With no key, everything is open —
+fine on a trusted LAN. The dashboard at `/` is public either way (it is meant
+for your own machine).
+
+Routes: `POST /api/uploads`, `GET/DELETE /api/drafts[/:id]`
+(`DELETE ...?purge=true` for a hard delete), `POST /api/drafts/:id/disable`,
+`POST /api/purge`, `GET /d/:id[/raw]`, `GET /d/:id/v/:n[/raw]`,
+`GET /healthz`.
+
+## CLI
+
+```sh
+keryx upload ./plan.html --description "Q3 migration plan"
+keryx list [--json]
+keryx raw <draft-id> [-v N]        # exact HTML to stdout
+keryx open <draft-id>              # open in browser
+keryx delete <draft-id> [--yes]    # soft delete: stops serving, keeps data
+keryx delete <draft-id> --purge    # hard delete: removes rows and files, no undo
+keryx purge [--yes]                # hard-delete everything already soft-deleted
+keryx auth set <api-key>           # verified against the server, then stored
+keryx auth clear
+```
+
+The API URL resolves as: `--api-url` flag > `KERYX_API_URL` env >
+`~/.keryx/config.json` > `http://localhost:7812`. Persist a non-default URL
+once with `keryx auth set <key> --api-url http://myhost:7812` (or edit
+`~/.keryx/config.json`).
+
+Re-uploading the same file path updates the same draft as a new version;
+`--new` forces a fresh draft, `--draft <id>` targets a specific one. Uploads
+also record best-effort git provenance (branch, commit, dirty state, repo)
+for display in listings — never for authorization.
+
+## TUI
+
+```sh
+keryx tui [--api-url http://myhost:7812]
+```
+
+`j`/`k` move · `Enter` version history · `o` open in browser · `y` show raw
+URL · `d` soft delete · `D` purge (permanent) · `r` refresh · `q` quit.
+Both delete keys ask for confirmation.
+
+## HTML policy
+
+Uploads may contain inline classic `<script>` blocks. Rejected at upload time:
+external script sources, module scripts, inline event handlers (`on*`),
+`javascript:`/`vbscript:`/`file:` URLs, `<form>`, `<iframe>`/`<object>`/
+`<embed>`/`<applet>`, `<base>`, `<link>`, `srcdoc`, meta-refresh, and unsafe
+inline CSS. Once stored, drafts are served verbatim.
+
+## Agent flow
+
+Write a complete static HTML file, then:
+
+```sh
+keryx upload ./plan.html
+```
+
+Hand the printed `Raw HTML` URL to other agents — `curl <url>` returns the
+document itself. A ready-made agent skill lives in
+[`skills/keryx/SKILL.md`](skills/keryx/SKILL.md).
+
+
+# Attribution
+
+This project is a Rust reimplementation derived from [PostPlan](https://www.npmjs.com/package/postplan/v/0.0.4?activeTab=code).
+
+PostPlan is Copyright (c) 2026 t3dotgg and was distributed under the MIT License. A copy of its original license is available in LICENSES/PostPlan-v0.0.4-MIT.md
+
+All new implementation work is Copyright (c) 2026 SimCube Ltd and is distributed under the MIT License in the root LICENSE file.
+
+This project is independently maintained by SimCube Ltd and is not affiliated with or endorsed by the original PostPlan author: Theo Browne (t3dotgg).
