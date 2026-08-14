@@ -25,10 +25,17 @@ secrets, private URLs, or local filesystem paths.
 
 Style, for documents about the work (plans, specs, reviews, findings, reports):
 
-- Write it like a spec, not a landing page: dense, scannable, no hero,
-  decorative chrome, marketing voice, or em dashes.
+- Write it like a spec, not a landing page: dense, scannable, no marketing
+  hero, decorative chrome, marketing voice, or em dashes. A typeset document
+  header (title, one-line lede, meta block) is not a hero.
+- Typeset it, do not render markdown: display-scale page title with tight
+  letter-spacing, uppercase letter-spaced kicker labels, hairline-rule grid
+  layouts instead of stacked prose, and a sticky jump nav on long documents.
 - True black (`#000`), white primary text, and dark gray only for secondary
   surfaces or accents.
+- One recurring identity accent color per document (kickers, badges, nav
+  highlights, scores) is welcome alongside semantic amber for risk and green
+  for verified.
 
 UI mocks are exempt from those style rules. A mock follows the design system of
 the product being mocked and the look the feature needs; if the app is
