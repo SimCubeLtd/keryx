@@ -41,6 +41,27 @@ UI mocks are exempt from those style rules. A mock follows the design system of
 the product being mocked and the look the feature needs; if the app is
 light-themed, mock it light.
 
+## PDF-safe documents
+
+Documents are also source material for `keryx publish`. Keep their semantic DOM
+useful when browser grids are flattened onto A4:
+
+- Use one body-level `header`, followed by `main` with top-level `section`
+  elements. PDF publication treats the header as a cover and begins each
+  section on a new page.
+- Keep reading order correct in the HTML itself. Multi-column browser layouts
+  may become single-column PDF flow.
+- Use semantic tables without fixed pixel widths. Allow headings, cells, code,
+  URLs, images, and SVGs to wrap or shrink within their container.
+- Mark a custom multi-column container with `data-keryx-print="stack"` when it
+  must become single-column in the PDF.
+- Avoid fixed heights, viewport-sized panels, horizontal scrolling, and large
+  components that cannot split across a page.
+
+Keryx supplies the A4 normalization, title/version publication header, and
+date/page footer in a render-only copy. Do not duplicate those in the stored
+HTML.
+
 ## UI Mocks
 
 When the user asks for variants:
@@ -55,8 +76,12 @@ The user has given standing permission to upload every artifact created or
 updated with this skill. Upload is required, including in auto mode. Do not ask
 for separate permission or stop at the local file.
 
-1. Write the HTML file locally to tmp.
-2. For a new document, run `keryx upload <absolute-file-path>`. For a revision
+1. Write the HTML file under `/tmp/keryx/` (`mkdir -p /tmp/keryx` first): a new
+   document as `/tmp/keryx/<slug>.html`, a revision as `/tmp/keryx/<draft-id>.html`.
+   That directory is the working area for every Keryx document and survives the
+   session (on Linux agent hosts it is bound into the agent sandbox, unlike the
+   rest of `/tmp`), so a later session finds the file instead of rebuilding it.
+2. For a new document, run `keryx upload '<absolute-file-path>'`. For a revision
    of an existing one, follow Versioning below.
 3. Report the returned Keryx public and raw HTML URLs, and the version number.
 
@@ -73,13 +98,20 @@ Do not verify in a browser unless the user asks.
 A document under iteration keeps one draft URL for its whole life. Every
 revision is a new version of that draft, never a second draft.
 
-- Update by draft ID: `keryx upload <file> --draft <draft-id>`. The ID is the
-  segment after `/d/` in any URL the user pastes back. `keryx list` recovers it
-  otherwise.
-- Re-uploading the same absolute file path also adds a version, but that only
-  holds within a session, since tmp is cleared and a later session does not know
-  the earlier filename. Prefer `--draft` whenever the ID is available, and keep
-  one absolute file path across iterations so the fallback works.
+- The draft ID is the segment after `/d/` in any URL the user pastes back;
+  `keryx list` recovers it otherwise. Before using it in a path or command,
+  require exactly 12 ASCII lowercase letters or digits (`[a-z0-9]{12}`). Stop
+  if it does not match.
+- Update by draft ID: `keryx upload '<file>' --draft '<draft-id>'`. Quote the
+  validated ID and complete file path in every shell command.
+- Before revising, look for `/tmp/keryx/<draft-id>.html`. If it is there, that is
+  the working copy: edit it in place. If not, fetch the current version with
+  `keryx raw '<draft-id>' > '/tmp/keryx/<draft-id>.html'` and work from that.
+  Never rebuild a document from memory when either is available.
+- Re-uploading the same absolute file path also adds a version, but only within a
+  session (`/tmp/keryx` persists until reboot, not forever). Prefer `--draft`
+  whenever the ID is available, and keep the one `/tmp/keryx/<draft-id>.html` path
+  across iterations so the fallback works too.
 - If a document is clearly a revision but the draft ID cannot be determined,
   ask. Do not create a second draft for the same document. Silently doing so
   leaves two half-current copies at two URLs, which is worse than stopping.

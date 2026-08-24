@@ -29,6 +29,10 @@ rewriting, no consent interstitials — to whoever holds the URL.
   Content-Security-Policy and `X-Keryx-Draft-Id` / `X-Keryx-Draft-Version`
   headers. The CSP never alters the bytes; it only constrains what the page
   may do in a browser (no script execution, no network, no form posts).
+- **Ship** — `keryx publish --id <id> --output report.pdf` renders the latest
+  immutable version as a paginated A4 PDF. `--version <n>` selects an older
+  version. The browser-free Fulgur renderer runs on the server, returns bytes
+  without storing a PDF, and the client writes the destination atomically.
 - **Browse** — a server-rendered dashboard at `/`, a `keryx list` command, and
   a full TUI (`keryx tui`) for browsing, opening, and deleting drafts.
 - **Stay small** — one binary, a SQLite index for metadata (default
@@ -56,15 +60,16 @@ keryx serve
 | `--db` / `KERYX_DB` | `~/.keryx/keryx.db` | SQLite path (metadata index) |
 | `--data-dir` / `KERYX_DATA_DIR` | `~/.keryx` | Root for stored HTML files (written under `drafts/`) |
 | `--public-base-url` / `KERYX_PUBLIC_BASE_URL` | request Host header | Base for returned links |
-| `--api-key` / `KERYX_API_KEY` | unset (open) | Require this Bearer key for mutations/listings |
+| `--api-key` / `KERYX_API_KEY` | unset (open) | Require this Bearer key for mutations, listings, and PDFs |
 | `--max-html-bytes` / `KERYX_MAX_HTML_BYTES` | `524288` | Upload size cap |
 
-With `KERYX_API_KEY` set, uploads, listings, and deletes require the key as a
-Bearer token; draft serving stays public. With no key, everything is open —
+With `KERYX_API_KEY` set, uploads, listings, deletes, and PDF publication
+require the key as a Bearer token; draft serving stays public. With no key, everything is open —
 fine on a trusted LAN. The dashboard at `/` is public either way (it is meant
 for your own machine).
 
-Routes: `POST /api/uploads`, `GET/DELETE /api/drafts[/:id]`
+Routes: `POST /api/uploads`, `GET/DELETE /api/drafts[/:id]`,
+`GET /api/drafts/:id/pdf[?version=n]`
 (`DELETE ...?purge=true` for a hard delete), `POST /api/drafts/:id/disable`,
 `POST /api/purge`, `GET /d/:id[/raw]`, `GET /d/:id/v/:n[/raw]`,
 `GET /healthz`.
@@ -75,6 +80,7 @@ Routes: `POST /api/uploads`, `GET/DELETE /api/drafts[/:id]`
 keryx upload ./plan.html --description "Q3 migration plan"
 keryx list [--json]
 keryx raw <draft-id> [-v N]        # exact HTML to stdout
+keryx publish --id <draft-id> --output ./report.pdf [--version N]
 keryx open <draft-id>              # open in browser
 keryx delete <draft-id> [--yes]    # soft delete: stops serving, keeps data
 keryx delete <draft-id> --purge    # hard delete: removes rows and files, no undo
@@ -92,6 +98,12 @@ Re-uploading the same file path updates the same draft as a new version;
 `--new` forces a fresh draft, `--draft <id>` targets a specific one. Uploads
 also record best-effort git provenance (branch, commit, dirty state, repo)
 for display in listings — never for authorization.
+
+`publish` is deliberately Keryx-specific: the endpoint accepts a draft ID and
+optional version, never arbitrary HTML. The server resolves that stored HTML,
+adds a title/version header and publication-date/page footer to a render-only
+copy, and returns the PDF without creating a new Keryx version or writing a PDF
+on the server. The CLI refuses to overwrite an existing output file.
 
 ## TUI
 
@@ -111,6 +123,16 @@ external script sources, module scripts, inline event handlers (`on*`),
 `<embed>`/`<applet>`, `<base>`, `<link>`, `srcdoc`, meta-refresh, and unsafe
 inline CSS. Once stored, drafts are served verbatim.
 
+PDF publication supports semantic HTML, paginated tables, inline SVG diagrams,
+and base64-embedded PNG, JPEG, and GIF `<img>` elements. A body-level `header`
+becomes the cover, and top-level sections begin on new pages. Use
+`keryx-page-flow` to keep a section in normal flow, `keryx-page-break` to force
+another element onto a new page, and `data-keryx-print="stack"` to flatten a
+custom multi-column layout for A4. Script-generated content, `<canvas>`, CSS
+imports, external images, and CSS image URLs are rejected for deterministic
+publication. An empty `data-keryx-version` element is filled with the selected
+version in the render copy.
+
 ## Agent flow
 
 Write a complete static HTML file, then:
@@ -120,8 +142,10 @@ keryx upload ./plan.html
 ```
 
 Hand the printed `Raw HTML` URL to other agents — `curl <url>` returns the
-document itself. A ready-made agent skill lives in
-[`skills/keryx/SKILL.md`](skills/keryx/SKILL.md).
+document itself. Repo-local agent workflows live in
+[`skills/html-communication/SKILL.md`](skills/html-communication/SKILL.md),
+[`skills/keryx-read/SKILL.md`](skills/keryx-read/SKILL.md), and
+[`skills/keryx-publish/SKILL.md`](skills/keryx-publish/SKILL.md).
 
 
 # Attribution

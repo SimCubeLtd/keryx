@@ -16,7 +16,9 @@ The purge is irreversible and is not a call to make on your own initiative.
 1. Resolve the draft ID and the version to keep. The ID is the segment after
    `/d/` in the URL the user gives; `keryx list` finds it otherwise. Name the
    approved version explicitly rather than assuming the latest is it. If which
-   version was approved is unclear, ask.
+   version was approved is unclear, ask. Before using the ID in a path or
+   command, require exactly 12 ASCII lowercase letters or digits
+   (`[a-z0-9]{12}`). Stop if it does not match.
 
 2. If the user wants it archived, decide where it goes before writing anything.
 
@@ -34,7 +36,7 @@ The purge is irreversible and is not a call to make on your own initiative.
    Then write the approved version:
 
    ```sh
-   keryx raw <draft-id> -v <n> > <path>
+   keryx raw '<draft-id>' -v '<n>' > '<path>'
    ```
 
    Copy the bytes. Do not reformat, convert to markdown, summarise, or add
@@ -49,13 +51,18 @@ The purge is irreversible and is not a call to make on your own initiative.
 4. Purge the draft and all of its versions:
 
    ```sh
-   keryx delete <draft-id> --purge --yes
+   keryx delete '<draft-id>' --purge --yes
    ```
 
    `--yes` is required because there is no interactive terminal. The read-back
    in step 3 is the safety gate, so never reorder these two steps.
 
-5. Report the archived path, if any, and the purged draft ID.
+5. Preserve working copies under `/tmp/keryx` by default. Only when the user
+   explicitly requests local cleanup, inspect the matches first and remove only
+   `/tmp/keryx/<draft-id>*.html` files for the validated draft ID. Report every
+   path removed.
+
+6. Report the archived path, if any, and the purged draft ID.
 
 Leave the archived file unstaged. Do not run git or GitButler commands, do not
 stage, and do not commit. Staging and the commit message belong to the

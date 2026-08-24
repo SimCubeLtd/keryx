@@ -267,6 +267,7 @@ pub struct ServedVersion {
     pub draft_id: String,
     pub version_number: i64,
     pub object_key: String,
+    pub created_at: String,
 }
 
 /// Look up a publicly servable draft version: the draft must exist and be
@@ -295,28 +296,43 @@ pub fn find_public_version(
     let row = match version {
         Some(n) => conn
             .query_row(
-                "SELECT version_number, object_key FROM draft_versions WHERE draft_id = ?1 AND version_number = ?2",
+                "SELECT version_number, object_key, created_at FROM draft_versions WHERE draft_id = ?1 AND version_number = ?2",
                 params![draft_id, n],
-                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
             )
             .optional()?,
         None => match current_version_id {
             Some(version_id) => conn
                 .query_row(
-                    "SELECT version_number, object_key FROM draft_versions WHERE id = ?1",
+                    "SELECT version_number, object_key, created_at FROM draft_versions WHERE id = ?1",
                     params![version_id],
-                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+                    |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                        ))
+                    },
                 )
                 .optional()?,
             None => None,
         },
     };
 
-    Ok(row.map(|(version_number, object_key)| ServedVersion {
-        draft_id,
-        version_number,
-        object_key,
-    }))
+    Ok(
+        row.map(|(version_number, object_key, created_at)| ServedVersion {
+            draft_id,
+            version_number,
+            object_key,
+            created_at,
+        }),
+    )
 }
 
 /// Every live draft, newest first, with the aggregates the dashboard, CLI, and

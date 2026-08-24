@@ -2,7 +2,8 @@
 //! keryx API.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -131,6 +132,16 @@ pub struct Api {
     http: reqwest::blocking::Client,
 }
 
+#[derive(Debug)]
+pub struct PublishResult {
+    pub draft_id: String,
+    pub version_number: i64,
+    pub public_url: String,
+    pub raw_url: String,
+    pub page_count: u32,
+    pub output_path: PathBuf,
+}
+
 impl Api {
     pub fn new(auth: CliAuth) -> Result<Self> {
         Ok(Self {
@@ -251,7 +262,140 @@ impl Api {
         Ok(response.text()?)
     }
 
+    /// Request a PDF for one stored Keryx version and atomically materialize
+    /// it at `output`. Existing files are never replaced.
+    pub fn publish_to_path(
+        &self,
+        draft_id: &str,
+        version: Option<i64>,
+        output: &Path,
+    ) -> Result<PublishResult> {
+        if version.is_some_and(|version| version < 1) {
+            bail!("version must be at least 1");
+        }
+        validate_output_path(output)?;
+
+        let mut request =
+            self.request(reqwest::Method::GET, &format!("/api/drafts/{draft_id}/pdf"));
+        if let Some(version) = version {
+            request = request.query(&[("version", version)]);
+        }
+        let mut response = request.send()?;
+        let status = response.status();
+        if !status.is_success() {
+            Self::json_body(response)?;
+            bail!("PDF request failed (HTTP {status})");
+        }
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        if !content_type.starts_with("application/pdf") {
+            bail!("server returned {content_type:?} instead of a PDF");
+        }
+
+        let response_draft_id = required_header(&response, "x-keryx-draft-id")?;
+        let version_number = required_header(&response, "x-keryx-draft-version")?
+            .parse::<i64>()
+            .context("server returned an invalid Keryx version header")?;
+        let public_url = required_header(&response, "x-keryx-public-url")?;
+        let raw_url = required_header(&response, "x-keryx-raw-url")?;
+        let page_count = required_header(&response, "x-keryx-pdf-pages")?
+            .parse::<u32>()
+            .context("server returned an invalid PDF page count")?;
+
+        persist_pdf(&mut response, output)?;
+        Ok(PublishResult {
+            draft_id: response_draft_id,
+            version_number,
+            public_url,
+            raw_url,
+            page_count,
+            output_path: output.to_path_buf(),
+        })
+    }
+
     pub fn public_url(&self, draft_id: &str) -> String {
         format!("{}/d/{draft_id}", self.base_url)
+    }
+}
+
+fn required_header(response: &reqwest::blocking::Response, name: &str) -> Result<String> {
+    response
+        .headers()
+        .get(name)
+        .with_context(|| format!("server response is missing {name}"))?
+        .to_str()
+        .with_context(|| format!("server returned an invalid {name} header"))
+        .map(str::to_string)
+}
+
+fn validate_output_path(output: &Path) -> Result<&Path> {
+    if output.file_name().is_none() {
+        bail!("output must name a PDF file");
+    }
+    if output.exists() {
+        bail!("refusing to replace existing file: {}", output.display());
+    }
+    let parent = output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    if !parent.is_dir() {
+        bail!("output directory does not exist: {}", parent.display());
+    }
+    Ok(parent)
+}
+
+fn persist_pdf(reader: &mut impl Read, output: &Path) -> Result<()> {
+    let parent = validate_output_path(output)?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("creating a temporary PDF in {}", parent.display()))?;
+    std::io::copy(reader, temporary.as_file_mut())
+        .with_context(|| format!("writing temporary PDF for {}", output.display()))?;
+    temporary.as_file_mut().flush()?;
+    temporary.as_file_mut().seek(SeekFrom::Start(0))?;
+    let mut magic = [0_u8; 5];
+    temporary
+        .as_file_mut()
+        .read_exact(&mut magic)
+        .context("server returned a truncated PDF")?;
+    if &magic != b"%PDF-" {
+        bail!("server returned invalid PDF bytes");
+    }
+    temporary.as_file().sync_all()?;
+    temporary
+        .persist_noclobber(output)
+        .map_err(|error| error.error)
+        .with_context(|| format!("publishing PDF to {}", output.display()))?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn persists_pdf_without_clobbering_an_existing_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("report.pdf");
+        persist_pdf(&mut std::io::Cursor::new(b"%PDF-test"), &output).unwrap();
+        assert_eq!(std::fs::read(&output).unwrap(), b"%PDF-test");
+
+        let error = persist_pdf(&mut std::io::Cursor::new(b"%PDF-replacement"), &output)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("refusing to replace"));
+        assert_eq!(std::fs::read(&output).unwrap(), b"%PDF-test");
+    }
+
+    #[test]
+    fn removes_temporary_output_when_pdf_is_invalid() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("report.pdf");
+        assert!(persist_pdf(&mut std::io::Cursor::new(b"not-pdf"), &output).is_err());
+        assert!(!output.exists());
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
     }
 }
