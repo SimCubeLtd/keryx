@@ -1,5 +1,5 @@
-//! HTTP server. One optional API key guards mutations and listings; draft
-//! serving is public; HTML bytes come straight out of SQLite.
+//! HTTP server. One optional API key guards mutations, listings, and PDF
+//! publication; draft HTML serving remains public.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -16,6 +16,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::db::{self, NewUpload, UploadError};
+use crate::pdf::{render_version_pdf, PdfIdentity};
 use crate::policy::{validate_html, DEFAULT_MAX_HTML_BYTES};
 use crate::render::{render_dashboard, render_not_found};
 use crate::storage::BlobStore;
@@ -90,24 +91,7 @@ pub fn run(args: ServeArgs) -> Result<()> {
     });
     let blob_root = state.store.root().join("drafts");
 
-    let app = Router::new()
-        .route("/", get(dashboard))
-        .route("/healthz", get(healthz))
-        .route("/api/me", get(me))
-        .route("/api/uploads", post(upload))
-        .route("/api/drafts", get(list_drafts))
-        .route("/api/drafts/{draft_id}", get(draft_detail))
-        .route("/api/drafts/{draft_id}", delete(delete_draft))
-        .route("/api/drafts/{draft_id}/disable", post(disable_draft))
-        .route("/api/purge", post(purge_deleted))
-        .route("/d/{draft_id}", get(serve_current))
-        .route("/d/{draft_id}/raw", get(serve_current))
-        .route("/d/{draft_id}/v/{version}", get(serve_version))
-        .route("/d/{draft_id}/v/{version}/raw", get(serve_version))
-        .fallback(not_found)
-        .layer(DefaultBodyLimit::max(args.max_html_bytes * 2 + 64 * 1024))
-        .layer(axum::middleware::map_response(common_headers))
-        .with_state(state);
+    let app = build_router(state, args.max_html_bytes);
 
     let addr = format!("{}:{}", args.host, args.port);
     let runtime = tokio::runtime::Runtime::new()?;
@@ -121,7 +105,7 @@ pub fn run(args: ServeArgs) -> Result<()> {
         println!(
             "auth: {}",
             if args.api_key.is_some() {
-                "API key required for uploads/listings/deletes"
+                "API key required for uploads/listings/deletes/PDFs"
             } else {
                 "open (set KERYX_API_KEY to require a key)"
             }
@@ -136,6 +120,28 @@ pub fn run(args: ServeArgs) -> Result<()> {
         .await?;
         Ok(())
     })
+}
+
+fn build_router(state: SharedState, max_html_bytes: usize) -> Router {
+    Router::new()
+        .route("/", get(dashboard))
+        .route("/healthz", get(healthz))
+        .route("/api/me", get(me))
+        .route("/api/uploads", post(upload))
+        .route("/api/drafts", get(list_drafts))
+        .route("/api/drafts/{draft_id}", get(draft_detail))
+        .route("/api/drafts/{draft_id}", delete(delete_draft))
+        .route("/api/drafts/{draft_id}/pdf", get(publish_pdf))
+        .route("/api/drafts/{draft_id}/disable", post(disable_draft))
+        .route("/api/purge", post(purge_deleted))
+        .route("/d/{draft_id}", get(serve_current))
+        .route("/d/{draft_id}/raw", get(serve_current))
+        .route("/d/{draft_id}/v/{version}", get(serve_version))
+        .route("/d/{draft_id}/v/{version}/raw", get(serve_version))
+        .fallback(not_found)
+        .layer(DefaultBodyLimit::max(max_html_bytes * 2 + 64 * 1024))
+        .layer(axum::middleware::map_response(common_headers))
+        .with_state(state)
 }
 
 async fn common_headers(mut response: Response) -> Response {
@@ -386,6 +392,98 @@ async fn draft_detail(
 }
 
 #[derive(Deserialize, Default)]
+struct PdfQuery {
+    version: Option<i64>,
+}
+
+/// Render one immutable stored version. This route intentionally accepts no
+/// HTML body, so Fulgur cannot be exposed as a general conversion service.
+async fn publish_pdf(
+    State(state): State<SharedState>,
+    Path(draft_id): Path<String>,
+    Query(query): Query<PdfQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if !authorized(&state, &headers) {
+        return unauthorized();
+    }
+    if query.version.is_some_and(|version| version < 1) {
+        return json_error(StatusCode::BAD_REQUEST, "Version must be at least 1.");
+    }
+
+    let served = {
+        let conn = state.db.lock().unwrap();
+        db::find_public_version(&conn, &draft_id, query.version)
+    };
+    let served = match served {
+        Ok(Some(served)) => served,
+        Ok(None) => return json_error(StatusCode::NOT_FOUND, "Draft version not found."),
+        Err(error) => return internal_error(error),
+    };
+    let html = match state.store.get(&served.object_key) {
+        Ok(html) => html,
+        Err(error) => return internal_error(error),
+    };
+
+    let render_draft_id = served.draft_id.clone();
+    let version_number = served.version_number;
+    let version_created_at = served.created_at;
+    let rendered = tokio::task::spawn_blocking(move || {
+        render_version_pdf(
+            &html,
+            PdfIdentity {
+                draft_id: &render_draft_id,
+                version_number,
+                version_created_at: &version_created_at,
+            },
+        )
+    })
+    .await;
+    let rendered = match rendered {
+        Ok(Ok(rendered)) => rendered,
+        Ok(Err(error)) => {
+            eprintln!("PDF export rejected for {draft_id} v{version_number}: {error:#}");
+            return json_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                &format!("PDF export failed: {error:#}"),
+            );
+        }
+        Err(error) => return internal_error(error.into()),
+    };
+
+    let base = base_url(&state, &headers);
+    let public_url = format!("{base}/d/{draft_id}/v/{version_number}");
+    let raw_url = format!("{public_url}/raw");
+    let mut response = rendered.bytes.into_response();
+    let response_headers = response.headers_mut();
+    response_headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/pdf"),
+    );
+    let disposition = format!("attachment; filename=\"keryx-{draft_id}-v{version_number}.pdf\"");
+    if let Ok(value) = HeaderValue::from_str(&disposition) {
+        response_headers.insert(header::CONTENT_DISPOSITION, value);
+    }
+    for (name, value) in [
+        ("x-keryx-draft-id", draft_id),
+        ("x-keryx-draft-version", version_number.to_string()),
+        ("x-keryx-public-url", public_url),
+        ("x-keryx-raw-url", raw_url),
+        ("x-keryx-pdf-pages", rendered.page_count.to_string()),
+        ("x-keryx-pdf-images", rendered.image_count.to_string()),
+        ("x-keryx-pdf-svgs", rendered.svg_count.to_string()),
+    ] {
+        if let (Ok(name), Ok(value)) = (
+            header::HeaderName::try_from(name),
+            HeaderValue::from_str(&value),
+        ) {
+            response_headers.insert(name, value);
+        }
+    }
+    response
+}
+
+#[derive(Deserialize, Default)]
 struct DeleteQuery {
     purge: Option<bool>,
 }
@@ -551,4 +649,143 @@ fn clean_text(value: Option<&str>, max_length: usize) -> Option<String> {
         return None;
     }
     Some(trimmed.chars().take(max_length).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+
+    fn upload<'a>(
+        html: &'a str,
+        draft_id: Option<String>,
+        metadata: &'a UploadMetadata,
+    ) -> NewUpload<'a> {
+        NewUpload {
+            html,
+            filename: Some("report.html".into()),
+            draft_id,
+            description: None,
+            title_from_html: Some("PDF endpoint test".into()),
+            metadata,
+            source_ip: None,
+            user_agent: None,
+            has_inline_script: false,
+            external_image_hosts: &[],
+        }
+    }
+
+    fn contains_pdf(path: &std::path::Path) -> bool {
+        let Ok(entries) = std::fs::read_dir(path) else {
+            return false;
+        };
+        entries.filter_map(std::result::Result::ok).any(|entry| {
+            let path = entry.path();
+            if path.is_dir() {
+                contains_pdf(&path)
+            } else {
+                path.extension().is_some_and(|extension| extension == "pdf")
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn pdf_endpoint_is_authenticated_versioned_and_ephemeral() {
+        let store = crate::storage::test_store();
+        let conn = db::open(&store.root().join("test.db")).unwrap();
+        let state = Arc::new(AppState {
+            db: Mutex::new(conn),
+            store,
+            public_base_url: Some("https://keryx.test".into()),
+            api_key_hash: Some(crate::sha256_hex("secret")),
+            max_html_bytes: DEFAULT_MAX_HTML_BYTES,
+        });
+        let metadata = UploadMetadata::default();
+        let draft_id = {
+            let mut conn = state.db.lock().unwrap();
+            let first = db::record_upload(
+                &mut conn,
+                &state.store,
+                upload(
+                    "<!doctype html><title>v1</title><h1>First</h1>",
+                    None,
+                    &metadata,
+                ),
+            )
+            .unwrap();
+            db::record_upload(
+                &mut conn,
+                &state.store,
+                upload(
+                    "<!doctype html><title>v2</title><h1>Latest</h1>",
+                    Some(first.draft_id.clone()),
+                    &metadata,
+                ),
+            )
+            .unwrap();
+            first.draft_id
+        };
+
+        let unauthorized = publish_pdf(
+            State(state.clone()),
+            Path(draft_id.clone()),
+            Query(PdfQuery::default()),
+            HeaderMap::new(),
+        )
+        .await;
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer secret"),
+        );
+        let before: i64 = state
+            .db
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM draft_versions", [], |row| row.get(0))
+            .unwrap();
+        let response = publish_pdf(
+            State(state.clone()),
+            Path(draft_id.clone()),
+            Query(PdfQuery::default()),
+            headers.clone(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::CONTENT_TYPE],
+            HeaderValue::from_static("application/pdf")
+        );
+        assert_eq!(response.headers()["x-keryx-draft-version"], "2");
+        assert_eq!(
+            response.headers()["x-keryx-public-url"],
+            format!("https://keryx.test/d/{draft_id}/v/2")
+        );
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert!(body.starts_with(b"%PDF-"));
+
+        let explicit = publish_pdf(
+            State(state.clone()),
+            Path(draft_id.clone()),
+            Query(PdfQuery { version: Some(1) }),
+            headers,
+        )
+        .await;
+        assert_eq!(explicit.status(), StatusCode::OK);
+        assert_eq!(explicit.headers()["x-keryx-draft-version"], "1");
+
+        let after: i64 = state
+            .db
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM draft_versions", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(after, before);
+        assert!(!contains_pdf(state.store.root()));
+
+        std::fs::remove_dir_all(state.store.root()).ok();
+    }
 }

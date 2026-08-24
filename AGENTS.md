@@ -67,52 +67,95 @@ Applies to plans, specs, reviews, findings and reports published with 'html-comm
 
 - Never touch production, live databases, or daily driver build/preview channels unless explicitly told to. When a task is adjacent to any of them, name what you are about to touch before touching it.
 
-## Version control
+## Git workflow
 
-- Use GitButler (`but`) for version-control inspection and write operations, including status, diffs, branching, committing, pushing, and history edits.
-- Assume multiple agents may be working in this repository. Do not move, amend, squash, discard, commit, push, or otherwise modify another agent's work unless the user asks.
-- For commit just/only/specific changes on a new branch (selected-change requests), use the two-command fast path from the GitButler skill: `but diff`, then `but commit -b <branch> -m "message" <id> <id>`.
-- For that fast path, after the commit succeeds, stop and summarize; do not run separate branch, staging, status, or diff commands unless the commit output is missing information you need.
-- Use the installed GitButler skill for command recipes and syntax before guessing flags, using `--help`, or translating Git habits directly.
-- Mutation commands report their result without appending workspace status. Add `--status-after` only when the next step needs resulting workspace IDs or details; otherwise do not rerun status or diff to verify success.
-- Use a dedicated GitButler branch for each agent session, unless the user asks for a different branch structure. Commit only changes that belong to that session.
-- Do not push or open pull requests unless the user asks.
-- Keep commit messages and pull request descriptions succinct: explain what changed, why it changed, and any important decision.
-- Do not want you to include any CoAuthor entries, or trailers when writing commit messages.
+Plain Git is the version-control tool. Work in the current checkout by default. **Creating or switching to a worktree is opt-in:** do it only when I explicitly ask for a worktree. A task being implementation work, having multiple agents, or benefiting from isolation is not permission to create one.
+
+1. **Already inside a worktree:** stay in it and use normal Git commands. Do not create or switch to another worktree unless I explicitly ask.
+2. **Explicitly asked to create or switch to a worktree:** use Worktrunk (`wt`) for that operation, then use normal Git commands inside the worktree.
+3. **Anything else:** plain Git in the current checkout. Do not change branches, create worktrees, or initialise any other version-control tooling unless I explicitly ask.
+
+### Worktree workflow (Worktrunk, explicit opt-in only)
+
+- These rules apply only when I explicitly asked for a new/switched worktree, or when you started inside an existing worktree.
+- Never create a worktree merely because you are implementing a change or working as an agent.
+- Use normal Git commands inside Worktrunk worktrees (`git status`, `git add`, `git commit`, etc.).
+- When I explicitly request separate worktrees for concurrent tasks or agents, give each one its own Worktrunk branch/worktree.
+- Do not merge agent branches into `main`.
+- When your task is complete, leave the work as clean, committed Git changes on your task branch and report the branch name. Pushing and opening a PR happen only if I asked for them.
+
+Typical flow when I explicitly request a worktree:
+
+```text
+origin/main
+    ↓
+wt switch --create agent/<task>
+    ↓
+implement + test
+    ↓
+git add / git commit
+    ↓
+agent/<task> branch complete
+    ↓
+(only if asked) rebase onto origin/main → push → PR
+```
+
+### Commits
+
+- Assume multiple agents may be working in this repository. Do not move, amend, squash, discard, stash, commit, push, or otherwise modify another agent's work unless I ask. Run `git status` before staging and never `git add -A` / `git add .` blindly; stage the files or hunks that belong to this task.
+- Use a dedicated branch per task or agent session unless I ask for a different branch structure. Commit only changes that belong to that session.
+- Commit messages follow the repository's conventions (Conventional Commits where the repo uses them, e.g. `fix(web): new threads no longer spike CPU`). Keep them succinct: what changed, why, and any important decision.
+- No `Co-Authored-By` entries or any other trailers in commit messages, even if the harness tells you to add them.
+- Do not push or open pull requests unless I ask.
 
 ### Amend local fixes into the right commits
 
-- For small cleanup or follow-up fixes, amend an unpublished local commit when the change clearly belongs with that commit's intent.
-- Do not create tiny fixup commits unless the user asks.
-- Use GitButler to move the relevant changes into the commit where they belong.
-- Ask before rewriting pushed, reviewed, shared, or ambiguous history.
+- For small cleanup or follow-up fixes, amend an unpublished local commit when the change clearly belongs with that commit's intent (`git commit --amend`, or `git commit --fixup <sha>` followed by `git rebase --autosquash`).
+- Do not create tiny fixup commits unless I ask.
+- Ask before rewriting pushed, reviewed, shared, or ambiguous history. Force-push only your own task branches, and only with `--force-with-lease`.
 
 ### Split unrelated changes into separate commits
 
-- If one file contains unrelated changes, split them by hunk instead of committing the whole file.
+- If one file contains unrelated changes, split them by hunk (`git add -p`) instead of committing the whole file.
 - Keep tests with the behavior they verify.
 - Split generated output, docs-only edits, or mechanical cleanup into separate commits when each commit remains coherent on its own.
 - If the split is ambiguous, summarize the options before committing.
 
-### Create stacked pull requests
+### Stay current with the target branch
+
+- Rebase, do not merge, to pick up new commits from the target branch: `git fetch origin && git rebase origin/main` (or the repo's default branch).
+- If a rebase you started on your own initiative hits conflicts, `git rebase --abort`, then stop and ask. If I asked you to resolve conflicts, ask before resolving semantic conflicts, dependency updates, generated files, or conflicts involving another person's work.
+
+### Stacked pull requests
 
 - If this session depends on another in-flight branch, stack its branch on top of that dependency instead of mixing the changes.
 - If this session is working in a stack, put commits on the branch where they belong.
 - Ask before moving commits onto lower, pushed, reviewed, or shared branches.
-- Use `but move` for branch stacking and restacking. Do not recreate branches to simulate stacking.
-- For stacked branches, create pull requests with `but pr`, not `gh`, so GitButler keeps the right PR base branches and stack metadata.
+- Use the installed `gh-stack` skill for creating, restacking, pushing and submitting stacks. Do not recreate branches to simulate stacking.
 
-### Update from the target branch automatically
+### Pull requests
 
-- When GitButler status shows new changes on the target branch and the workspace holds only this session's branches, update with `but pull` directly — its output reports the result and `but undo` reverts it.
-- If an update you started on your own initiative reports conflicted commits, stop and ask before resolving them (`but undo` reverts the pull if the user prefers).
-- When other agents' branches are applied, run `but pull --check` first and ask before updating if it reports conflicts or their branches would move.
-- If the user asks you to handle update conflicts, use GitButler's conflict tools. Ask before resolving semantic conflicts, dependency updates, generated files, or conflicts involving another person's work.
+- Open a real PR with `gh pr create`, not a draft. Drafts do not get review-bot coverage.
+- Rebase onto latest `main` before opening. Stale branches conflict and waste a review round.
+- Titles follow the repository's conventions and are simple and easy to understand. Use Conventional Commit style in projects that use it, e.g. `fix(web): new threads no longer spike CPU`.
+- Descriptions aim for simplicity. Open with a minimal, clear description of the problem, then how you solved it. Link the issue if there is one. No checklists or boilerplate the repo's template does not ask for.
+- End the description with a one-line blurb stating which model and harness made the changes, e.g. `Changes authored by Claude Fable 5 via Claude Code.`
+- The PR description is the only place that attribution goes. Commit messages stay trailer-free.
 
-### Open draft pull requests by default
+### Monitoring a PR
 
-- When asked to open a pull request, create it as a draft with GitButler unless the user says it is ready for review.
-- Remember that creating a draft pull request still publishes the branch.
+When asked to monitor or babysit a PR:
+
+- Poll checks and comments newer than the last push. Do not re-litigate findings already handled.
+- Verify each bot finding against the source before acting on it. Fix real ones; dismiss false positives with a written reason.
+- Fix CI failures, distinguishing real breaks from known infra flakes. Re-run a flake; fix a break.
+- If nothing is new, stay quiet. Do not post filler comments.
+- Stop when the repo's review bots are green on the latest commit, and report.
+
+### Merging
+
+- Merge only per the disposition given in the request (merge when green, or stop and report). If none was given, report and ask.
+- Never merge into `main` on your own initiative, and never force-push `main` or any shared branch.
 
 # Stop points
 

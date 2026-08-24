@@ -1,4 +1,4 @@
-//! CLI subcommands: upload, list, raw, open, delete, and auth.
+//! CLI subcommands: upload, publish, list, raw, open, delete, and auth.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -47,6 +47,22 @@ pub struct RawArgs {
     /// Fetch a specific version
     #[arg(long, short = 'v')]
     pub version: Option<i64>,
+    /// Override the Keryx API base URL
+    #[arg(long)]
+    pub api_url: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct PublishArgs {
+    /// Keryx draft id
+    #[arg(long)]
+    pub id: String,
+    /// Publish a specific immutable version (latest when omitted)
+    #[arg(long)]
+    pub version: Option<i64>,
+    /// Destination PDF path (must not already exist)
+    #[arg(long)]
+    pub output: PathBuf,
     /// Override the Keryx API base URL
     #[arg(long)]
     pub api_url: Option<String>,
@@ -222,6 +238,19 @@ pub fn raw(args: RawArgs) -> Result<()> {
     let api = Api::from_args(args.api_url.as_deref())?;
     let html = api.raw_html(&args.draft_id, args.version)?;
     print!("{html}");
+    Ok(())
+}
+
+pub fn publish(args: PublishArgs) -> Result<()> {
+    let api = Api::from_args(args.api_url.as_deref())?;
+    let result = api.publish_to_path(&args.id, args.version, &args.output)?;
+    println!("Published PDF");
+    println!("Output: {}", result.output_path.display());
+    println!("Draft ID: {}", result.draft_id);
+    println!("Version: {}", result.version_number);
+    println!("Pages: {}", result.page_count);
+    println!("Source: {}", result.public_url);
+    println!("Raw HTML: {}", result.raw_url);
     Ok(())
 }
 

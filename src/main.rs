@@ -3,6 +3,7 @@ mod client;
 mod db;
 mod gitmeta;
 mod ids;
+mod pdf;
 mod policy;
 mod render;
 mod server;
@@ -34,6 +35,8 @@ enum Command {
     List(cli::ListArgs),
     /// Print a draft's raw HTML to stdout
     Raw(cli::RawArgs),
+    /// Publish an immutable draft version as a PDF
+    Publish(cli::PublishArgs),
     /// Open a draft in the browser
     Open(cli::OpenArgs),
     /// Delete a draft (soft by default; --purge removes it permanently)
@@ -60,6 +63,7 @@ fn main() {
         Command::Upload(args) => cli::upload(args),
         Command::List(args) => cli::list(args),
         Command::Raw(args) => cli::raw(args),
+        Command::Publish(args) => cli::publish(args),
         Command::Open(args) => cli::open(args),
         Command::Delete(args) => cli::delete(args),
         Command::Purge(args) => cli::purge(args),
@@ -70,5 +74,35 @@ fn main() {
     if let Err(error) = result {
         eprintln!("{error:#}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn publish_requires_named_id_and_output_flags() {
+        assert!(Cli::try_parse_from(["keryx", "publish", "--id", "abc123def456"]).is_err());
+        assert!(Cli::try_parse_from([
+            "keryx",
+            "publish",
+            "--id",
+            "abc123def456",
+            "--output",
+            "/tmp/report.pdf",
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "keryx",
+            "publish",
+            "--id",
+            "abc123def456",
+            "--version",
+            "3",
+            "--output",
+            "/tmp/report.pdf",
+        ])
+        .is_ok());
     }
 }
