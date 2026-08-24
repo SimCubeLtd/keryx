@@ -57,7 +57,7 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "building $version from tag $TAG"
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
       - run: cargo test
 
@@ -84,7 +84,7 @@ jobs:
         with:
           ref: ${{ github.event.release.tag_name || github.event.inputs.tag }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@nightly
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
