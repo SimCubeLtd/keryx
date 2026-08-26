@@ -61,6 +61,10 @@ pub struct PolicyOptions {
     /// Permit inline `on*` handlers whose body is assignment-only (see
     /// [`is_assignment_only`]).
     pub allow_safe_handlers: bool,
+    /// Serve drafts with `script-src 'unsafe-inline'` instead of `'none'`, so
+    /// inline scripts and permitted handlers actually run in a browser. Upload
+    /// validation is unaffected; this only widens the served CSP.
+    pub allow_inline_scripts: bool,
 }
 
 impl Default for PolicyOptions {
@@ -69,6 +73,7 @@ impl Default for PolicyOptions {
             max_html_bytes: DEFAULT_MAX_HTML_BYTES,
             allow_font_links: false,
             allow_safe_handlers: false,
+            allow_inline_scripts: false,
         }
     }
 }
@@ -233,6 +238,16 @@ pub fn validate_html(html: &str, options: &PolicyOptions) -> Validation {
         push_unique(
             &mut v.warnings,
             "No <title> found; Keryx will use a generic title.".into(),
+        );
+    }
+
+    if v.has_inline_script && !options.allow_inline_scripts {
+        push_unique(
+            &mut v.warnings,
+            "Document has inline <script>; this server serves drafts with \
+             script-src 'none', so it will not run. Start keryx serve with \
+             --allow-inline-scripts to let it execute."
+                .into(),
         );
     }
 
@@ -427,6 +442,29 @@ mod tests {
             .errors
             .iter()
             .any(|e| e.contains("Unsupported script type")));
+    }
+
+    #[test]
+    fn warns_when_a_stored_script_could_never_run() {
+        let v = validate("<title>t</title><script>console.log(1)</script>");
+        assert!(v.ok(), "errors: {:?}", v.errors);
+        assert!(v
+            .warnings
+            .iter()
+            .any(|w| w.contains("--allow-inline-scripts")));
+
+        let v = validate_with(
+            "<title>t</title><script>console.log(1)</script>",
+            PolicyOptions {
+                allow_inline_scripts: true,
+                ..PolicyOptions::default()
+            },
+        );
+        assert!(v.warnings.is_empty(), "warnings: {:?}", v.warnings);
+
+        // A data block is inert by spec, so the warning would be noise.
+        let v = validate("<title>t</title><script type=\"application/json\">{}</script>");
+        assert!(v.warnings.is_empty(), "warnings: {:?}", v.warnings);
     }
 
     #[test]

@@ -62,6 +62,12 @@ pub struct ServeArgs {
     /// async-CSS idiom onload="this.media='all'"
     #[arg(long, env = "KERYX_ALLOW_SAFE_HANDLERS")]
     pub allow_safe_handlers: bool,
+
+    /// Serve drafts with script-src 'unsafe-inline' so inline scripts and
+    /// permitted on* handlers actually run. Accepting a script at upload is
+    /// not enough on its own: without this the CSP still blocks execution
+    #[arg(long, env = "KERYX_ALLOW_INLINE_SCRIPTS")]
+    pub allow_inline_scripts: bool,
 }
 
 impl ServeArgs {
@@ -70,6 +76,7 @@ impl ServeArgs {
             max_html_bytes: self.max_html_bytes,
             allow_font_links: self.allow_font_links,
             allow_safe_handlers: self.allow_safe_handlers,
+            allow_inline_scripts: self.allow_inline_scripts,
         }
     }
 }
@@ -109,7 +116,7 @@ pub fn run(args: ServeArgs) -> Result<()> {
             .map(|u| u.trim_end_matches('/').to_string()),
         api_key_hash: args.api_key.as_deref().map(crate::sha256_hex),
         policy: args.policy(),
-        csp: draft_csp(args.allow_font_links),
+        csp: draft_csp(&args.policy()),
     });
     let blob_root = state.store.root().join("drafts");
 
@@ -136,6 +143,14 @@ pub fn run(args: ServeArgs) -> Result<()> {
                 " · assignment-only on* handlers allowed"
             } else {
                 ""
+            }
+        );
+        println!(
+            "scripts: {}",
+            if args.allow_inline_scripts {
+                "inline scripts execute (script-src 'unsafe-inline')"
+            } else {
+                "inline scripts stored but never executed (script-src 'none')"
             }
         );
         println!(
@@ -180,19 +195,33 @@ fn build_router(state: SharedState, max_html_bytes: usize) -> Router {
         .with_state(state)
 }
 
-/// CSP for served drafts. Scripts never run and the bytes are never altered;
-/// the only knob is whether Google Fonts may be fetched, which has to match the
-/// upload policy or an accepted font `<link>` would be blocked at render time.
-fn draft_csp(allow_font_links: bool) -> HeaderValue {
-    HeaderValue::from_static(if allow_font_links {
-        "default-src 'none'; script-src 'none'; \
-         style-src 'unsafe-inline' https://fonts.googleapis.com; \
-         font-src https://fonts.gstatic.com; img-src https: data:; \
-         connect-src 'none'; base-uri 'none'; form-action 'none'"
+/// CSP for served drafts. Built once at startup: the bytes are never altered,
+/// so the only question is what the page may do once a browser has it. Both
+/// knobs have to track the upload policy — accepting a font `<link>` or an
+/// inline script and then blocking it here would store content that can never
+/// work. `connect-src` stays `'none'` either way: a draft is a document, not
+/// a client for something else.
+fn draft_csp(policy: &PolicyOptions) -> HeaderValue {
+    // 'unsafe-inline' covers inline <script>, on* handlers, and javascript:
+    // URLs; upload validation is what keeps the last two in check.
+    let script_src = if policy.allow_inline_scripts {
+        "'unsafe-inline'"
     } else {
-        "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; \
+        "'none'"
+    };
+    let (style_src, font_src) = if policy.allow_font_links {
+        (
+            "'unsafe-inline' https://fonts.googleapis.com",
+            " font-src https://fonts.gstatic.com;",
+        )
+    } else {
+        ("'unsafe-inline'", "")
+    };
+    let csp = format!(
+        "default-src 'none'; script-src {script_src}; style-src {style_src};{font_src} \
          img-src https: data:; connect-src 'none'; base-uri 'none'; form-action 'none'"
-    })
+    );
+    HeaderValue::from_str(&csp).expect("CSP is built from ASCII fragments")
 }
 
 async fn common_headers(mut response: Response) -> Response {
@@ -721,6 +750,27 @@ mod tests {
         }
     }
 
+    #[test]
+    fn csp_tracks_the_upload_policy() {
+        let strict = draft_csp(&PolicyOptions::default());
+        let strict = strict.to_str().unwrap();
+        assert!(strict.contains("script-src 'none'"));
+        assert!(!strict.contains("fonts.googleapis.com"));
+        assert!(!strict.contains("font-src"));
+
+        let open = draft_csp(&PolicyOptions {
+            allow_font_links: true,
+            allow_inline_scripts: true,
+            ..PolicyOptions::default()
+        });
+        let open = open.to_str().unwrap();
+        assert!(open.contains("script-src 'unsafe-inline'"));
+        assert!(open.contains("style-src 'unsafe-inline' https://fonts.googleapis.com"));
+        assert!(open.contains("font-src https://fonts.gstatic.com"));
+        // A draft is a document, never a client for something else.
+        assert!(open.contains("connect-src 'none'"));
+    }
+
     fn contains_pdf(path: &std::path::Path) -> bool {
         let Ok(entries) = std::fs::read_dir(path) else {
             return false;
@@ -745,7 +795,7 @@ mod tests {
             public_base_url: Some("https://keryx.test".into()),
             api_key_hash: Some(crate::sha256_hex("secret")),
             policy: PolicyOptions::default(),
-            csp: draft_csp(false),
+            csp: draft_csp(&PolicyOptions::default()),
         });
         let metadata = UploadMetadata::default();
         let draft_id = {
