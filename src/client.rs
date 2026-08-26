@@ -9,6 +9,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::policy::PolicyOptions;
 use crate::types::{DraftDetail, DraftSummary, UploadResponse};
 
 pub const DEFAULT_API_URL: &str = "http://localhost:7812";
@@ -196,6 +197,18 @@ impl Api {
     pub fn me(&self) -> Result<()> {
         let response = self.request(reqwest::Method::GET, "/api/me").send()?;
         Self::json_body(response).map(|_| ())
+    }
+
+    /// The server's effective upload policy, so local validation matches what
+    /// the server will accept. Falls back to the defaults when the server is
+    /// unreachable or predates the field — the upload itself still decides.
+    pub fn policy(&self) -> PolicyOptions {
+        self.request(reqwest::Method::GET, "/api/me")
+            .send()
+            .ok()
+            .and_then(|response| response.json::<Value>().ok())
+            .and_then(|body| serde_json::from_value(body.get("policy")?.clone()).ok())
+            .unwrap_or_default()
     }
 
     pub fn upload(&self, payload: &Value) -> Result<UploadResponse> {

@@ -10,7 +10,7 @@ use serde_json::json;
 
 use crate::client::{read_auth, save_credentials, Api, CliAuth, DraftMapping};
 use crate::gitmeta;
-use crate::policy::{validate_html, DEFAULT_MAX_HTML_BYTES};
+use crate::policy::validate_html;
 
 #[derive(Args, Debug)]
 pub struct UploadArgs {
@@ -124,7 +124,9 @@ pub fn upload(args: UploadArgs) -> Result<()> {
     let html =
         std::fs::read_to_string(&file).with_context(|| format!("reading {}", file.display()))?;
 
-    let validation = validate_html(&html, DEFAULT_MAX_HTML_BYTES);
+    let api = Api::from_args(args.api_url.as_deref())?;
+
+    let validation = validate_html(&html, &api.policy());
     if !validation.ok() {
         bail!(
             "HTML failed Keryx validation:\n- {}",
@@ -132,7 +134,6 @@ pub fn upload(args: UploadArgs) -> Result<()> {
         );
     }
 
-    let api = Api::from_args(args.api_url.as_deref())?;
     let mut drafts = crate::client::read_drafts();
     let file_key = file.to_string_lossy().to_string();
     let known_draft_id = drafts.files.get(&file_key).map(|m| m.draft_id.clone());

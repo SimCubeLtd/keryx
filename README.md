@@ -62,6 +62,8 @@ keryx serve
 | `--public-base-url` / `KERYX_PUBLIC_BASE_URL` | request Host header | Base for returned links |
 | `--api-key` / `KERYX_API_KEY` | unset (open) | Require this Bearer key for mutations, listings, and PDFs |
 | `--max-html-bytes` / `KERYX_MAX_HTML_BYTES` | `524288` | Upload size cap |
+| `--allow-font-links` / `KERYX_ALLOW_FONT_LINKS` | off | Accept `<link>` to Google Fonts, and widen the served CSP to match |
+| `--allow-safe-handlers` / `KERYX_ALLOW_SAFE_HANDLERS` | off | Accept assignment-only inline `on*` handlers |
 
 With `KERYX_API_KEY` set, uploads, listings, deletes, and PDF publication
 require the key as a Bearer token; draft serving stays public. With no key, everything is open —
@@ -117,11 +119,30 @@ Both delete keys ask for confirmation.
 
 ## HTML policy
 
-Uploads may contain inline classic `<script>` blocks. Rejected at upload time:
-external script sources, module scripts, inline event handlers (`on*`),
-`javascript:`/`vbscript:`/`file:` URLs, `<form>`, `<iframe>`/`<object>`/
-`<embed>`/`<applet>`, `<base>`, `<link>`, `srcdoc`, meta-refresh, and unsafe
-inline CSS. Once stored, drafts are served verbatim.
+Uploads may contain inline classic `<script>` blocks, and inert data blocks
+(`<script type="application/json">` / `application/ld+json`, which no browser
+executes). Rejected at upload time: external script sources, module scripts,
+`importmap`, inline event handlers (`on*`), `javascript:`/`vbscript:`/`file:`
+URLs, `<form>`, `<iframe>`/`<object>`/`<embed>`/`<applet>`, `<base>`, `<link>`,
+`srcdoc`, meta-refresh, and unsafe inline CSS. Once stored, drafts are served
+verbatim.
+
+Two rules relax per-server, off by default:
+
+- `--allow-font-links` accepts a `<link>` whose `rel` is only
+  `stylesheet`/`preconnect`/`dns-prefetch`/`preload` and whose `href` host is
+  `fonts.googleapis.com` or `fonts.gstatic.com`. `<base>` and every other host
+  stay blocked. The flag also adds `style-src https://fonts.googleapis.com` and
+  `font-src https://fonts.gstatic.com` to the CSP on served drafts, without
+  which an accepted font link would still be blocked in the browser.
+- `--allow-safe-handlers` accepts an inline `on*` handler whose body is nothing
+  but `;`-separated assignments of literals or dotted property paths — the
+  async-CSS idiom `onload="this.media='all'"`. Anything containing `(`, `[`,
+  `<`, a template literal, or a blocked scheme is still rejected, so a permitted
+  handler can set properties but cannot call anything.
+
+`keryx upload` reads the server's effective policy from `GET /api/me` before
+validating locally, so the CLI never rejects a document the server would accept.
 
 PDF publication supports semantic HTML, paginated tables, inline SVG diagrams,
 and base64-embedded PNG, JPEG, and GIF `<img>` elements. A body-level `header`
