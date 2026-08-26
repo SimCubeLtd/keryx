@@ -64,6 +64,7 @@ keryx serve
 | `--max-html-bytes` / `KERYX_MAX_HTML_BYTES` | `524288` | Upload size cap |
 | `--allow-font-links` / `KERYX_ALLOW_FONT_LINKS` | off | Accept `<link>` to Google Fonts, and widen the served CSP to match |
 | `--allow-safe-handlers` / `KERYX_ALLOW_SAFE_HANDLERS` | off | Accept assignment-only inline `on*` handlers |
+| `--allow-inline-scripts` / `KERYX_ALLOW_INLINE_SCRIPTS` | off | Serve with `script-src 'unsafe-inline'` so inline scripts actually run |
 
 With `KERYX_API_KEY` set, uploads, listings, deletes, and PDF publication
 require the key as a Bearer token; draft serving stays public. With no key, everything is open —
@@ -140,6 +141,19 @@ Two rules relax per-server, off by default:
   async-CSS idiom `onload="this.media='all'"`. Anything containing `(`, `[`,
   `<`, a template literal, or a blocked scheme is still rejected, so a permitted
   handler can set properties but cannot call anything.
+
+Accepting a script at upload is not the same as letting it run. Drafts serve with
+`script-src 'none'` by default, so an inline `<script>` is stored and returned
+byte for byte but never executes in a browser, and neither does an `on*` handler
+accepted by `--allow-safe-handlers`. `--allow-inline-scripts` switches the served
+CSP to `script-src 'unsafe-inline'`, which covers inline scripts, event handlers
+and `javascript:` URLs alike; upload validation is what keeps the last two in
+check. `connect-src` stays `'none'` regardless: a draft is a document, not a
+client for something else.
+
+Uploading a document with inline scripts to a server that does not have the flag
+returns a warning saying so, rather than leaving you to find it in the browser
+console.
 
 `keryx upload` reads the server's effective policy from `GET /api/me` before
 validating locally, so the CLI never rejects a document the server would accept.
