@@ -303,7 +303,12 @@ async fn dashboard(State(state): State<SharedState>, headers: HeaderMap) -> Resp
             for draft in &mut drafts {
                 fill_urls(draft, &base);
             }
-            Html(render_dashboard(&drafts, &base)).into_response()
+            Html(render_dashboard(
+                &drafts,
+                &base,
+                state.api_key_hash.is_none(),
+            ))
+            .into_response()
         }
         Err(error) => internal_error(error),
     }

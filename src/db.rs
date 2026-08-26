@@ -55,6 +55,9 @@ fn init(conn: &Connection) -> Result<()> {
             content_hash TEXT NOT NULL,
             file_size INTEGER NOT NULL,
             created_at TEXT NOT NULL,
+            repo_org TEXT,
+            repo_name TEXT,
+            repo_host TEXT,
             source_ip TEXT,
             user_agent TEXT,
             cli_version TEXT,
@@ -72,7 +75,59 @@ fn init(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS drafts_updated_at_idx ON drafts(updated_at);
         "#,
     )?;
+
+    // Schema version 1 moves repository provenance onto immutable versions.
+    // The transaction makes the ALTER/backfill marker atomic across restarts.
+    let schema_version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if schema_version < 1 {
+        let tx = conn.unchecked_transaction()?;
+        let version_columns = table_columns(&tx, "draft_versions")?;
+        for (column, definition) in [
+            ("repo_org", "repo_org TEXT"),
+            ("repo_name", "repo_name TEXT"),
+            ("repo_host", "repo_host TEXT"),
+        ] {
+            if !version_columns.iter().any(|existing| existing == column) {
+                tx.execute(
+                    &format!("ALTER TABLE draft_versions ADD COLUMN {definition}"),
+                    [],
+                )?;
+            }
+        }
+
+        // Older databases kept repository provenance only on the draft row.
+        // Preserve it on the version that was current at migration time.
+        tx.execute_batch(
+            r#"
+            UPDATE draft_versions
+            SET repo_org = (
+                    SELECT d.repo_org FROM drafts d
+                    WHERE d.current_version_id = draft_versions.id
+                ),
+                repo_name = (
+                    SELECT d.repo_name FROM drafts d
+                    WHERE d.current_version_id = draft_versions.id
+                ),
+                repo_host = (
+                    SELECT d.repo_host FROM drafts d
+                    WHERE d.current_version_id = draft_versions.id
+                )
+            WHERE id IN (
+                SELECT current_version_id FROM drafts
+                WHERE current_version_id IS NOT NULL
+            );
+            "#,
+        )?;
+        tx.pragma_update(None, "user_version", 1)?;
+        tx.commit()?;
+    }
     Ok(())
+}
+
+fn table_columns(conn: &Connection, table: &str) -> Result<Vec<String>> {
+    let mut statement = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let columns = statement.query_map([], |row| row.get(1))?;
+    Ok(columns.collect::<Result<Vec<_>, _>>()?)
 }
 
 pub struct NewUpload<'a> {
@@ -201,11 +256,11 @@ pub fn record_upload(
         r#"
         INSERT INTO draft_versions (
             id, draft_id, version_number, object_key, content_hash, file_size, created_at,
-            source_ip, user_agent, cli_version, git_branch, git_commit_sha,
-            git_commit_subject, git_dirty, original_filename, has_inline_script,
-            external_image_hosts
+            repo_org, repo_name, repo_host, source_ip, user_agent, cli_version,
+            git_branch, git_commit_sha, git_commit_subject, git_dirty,
+            original_filename, has_inline_script, external_image_hosts
         )
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
         "#,
         params![
             version_id,
@@ -215,6 +270,9 @@ pub fn record_upload(
             content_hash,
             file_size,
             timestamp,
+            m.repo_org,
+            m.repo_name,
+            m.repo_host,
             upload.source_ip,
             upload.user_agent,
             m.cli_version,
@@ -234,9 +292,9 @@ pub fn record_upload(
         SET current_version_id = ?1,
             title = ?2,
             description = COALESCE(?3, description),
-            repo_org = COALESCE(?4, repo_org),
-            repo_name = COALESCE(?5, repo_name),
-            repo_host = COALESCE(?6, repo_host),
+            repo_org = ?4,
+            repo_name = ?5,
+            repo_host = ?6,
             updated_at = ?7
         WHERE id = ?8
         "#,
@@ -341,9 +399,13 @@ pub fn list_drafts(conn: &Connection) -> Result<Vec<DraftSummary>> {
     let mut statement = conn.prepare(
         r#"
         SELECT
-            d.id, d.title, d.description, d.repo_org, d.repo_name, d.repo_host,
+            d.id, d.title, d.description,
+            cv.repo_org,
+            cv.repo_name,
+            cv.repo_host,
             d.created_at, d.updated_at, d.disabled_at,
-            cv.version_number, cv.created_at,
+            cv.version_number, cv.created_at, cv.git_branch, cv.git_commit_sha,
+            cv.git_commit_subject, cv.git_dirty,
             (SELECT COUNT(*) FROM draft_versions v WHERE v.draft_id = d.id)
         FROM drafts d
         LEFT JOIN draft_versions cv ON cv.id = d.current_version_id
@@ -365,7 +427,11 @@ pub fn list_drafts(conn: &Connection) -> Result<Vec<DraftSummary>> {
             disabled: row.get::<_, Option<String>>(8)?.is_some(),
             latest_version_number: row.get(9)?,
             latest_version_at: row.get(10)?,
-            version_count: row.get(11)?,
+            latest_git_branch: row.get(11)?,
+            latest_git_commit_sha: row.get(12)?,
+            latest_git_commit_subject: row.get(13)?,
+            latest_git_dirty: row.get(14)?,
+            version_count: row.get(15)?,
             public_url: String::new(),
             raw_url: String::new(),
         })
@@ -383,8 +449,9 @@ pub fn get_draft_summary(conn: &Connection, draft_id: &str) -> Result<Option<Dra
 pub fn list_versions(conn: &Connection, draft_id: &str) -> Result<Vec<VersionInfo>> {
     let mut statement = conn.prepare(
         r#"
-        SELECT id, version_number, created_at, git_branch, git_commit_sha,
-               git_commit_subject, git_dirty, file_size, original_filename
+        SELECT id, version_number, created_at, repo_org, repo_name, repo_host,
+               git_branch, git_commit_sha, git_commit_subject, git_dirty,
+               file_size, original_filename
         FROM draft_versions
         WHERE draft_id = ?1
         ORDER BY version_number DESC
@@ -396,12 +463,15 @@ pub fn list_versions(conn: &Connection, draft_id: &str) -> Result<Vec<VersionInf
             id: row.get(0)?,
             version_number: row.get(1)?,
             created_at: row.get(2)?,
-            git_branch: row.get(3)?,
-            git_commit_sha: row.get(4)?,
-            git_commit_subject: row.get(5)?,
-            git_dirty: row.get(6)?,
-            file_size: row.get(7)?,
-            original_filename: row.get(8)?,
+            repo_org: row.get(3)?,
+            repo_name: row.get(4)?,
+            repo_host: row.get(5)?,
+            git_branch: row.get(6)?,
+            git_commit_sha: row.get(7)?,
+            git_commit_subject: row.get(8)?,
+            git_dirty: row.get(9)?,
+            file_size: row.get(10)?,
+            original_filename: row.get(11)?,
         })
     })?;
 
@@ -618,6 +688,177 @@ mod tests {
         assert!(purge_draft(&mut conn, &second.draft_id).unwrap().is_none());
 
         std::fs::remove_dir_all(store.root()).ok();
+    }
+
+    #[test]
+    fn repository_and_branch_provenance_are_versioned() {
+        let mut conn = test_conn();
+        let store = crate::storage::test_store();
+        let first_meta = UploadMetadata {
+            repo_org: Some("acme".into()),
+            repo_name: Some("widgets".into()),
+            repo_host: Some("github.com".into()),
+            git_branch: Some("main".into()),
+            ..UploadMetadata::default()
+        };
+        let second_meta = UploadMetadata {
+            repo_org: Some("acme-labs".into()),
+            repo_name: Some("widgets-next".into()),
+            repo_host: Some("gitlab.com".into()),
+            git_branch: Some("feature/dashboard".into()),
+            ..UploadMetadata::default()
+        };
+
+        let first = record_upload(
+            &mut conn,
+            &store,
+            upload("<title>Test</title>v1", None, &first_meta),
+        )
+        .unwrap();
+        record_upload(
+            &mut conn,
+            &store,
+            upload(
+                "<title>Test</title>v2",
+                Some(first.draft_id.clone()),
+                &second_meta,
+            ),
+        )
+        .unwrap();
+
+        let summary = get_draft_summary(&conn, &first.draft_id).unwrap().unwrap();
+        assert_eq!(summary.repo_host.as_deref(), Some("gitlab.com"));
+        assert_eq!(summary.repo_org.as_deref(), Some("acme-labs"));
+        assert_eq!(summary.repo_name.as_deref(), Some("widgets-next"));
+        assert_eq!(
+            summary.latest_git_branch.as_deref(),
+            Some("feature/dashboard")
+        );
+
+        let versions = list_versions(&conn, &first.draft_id).unwrap();
+        assert_eq!(versions[0].repo_host.as_deref(), Some("gitlab.com"));
+        assert_eq!(versions[0].repo_org.as_deref(), Some("acme-labs"));
+        assert_eq!(versions[0].git_branch.as_deref(), Some("feature/dashboard"));
+        assert_eq!(versions[1].repo_host.as_deref(), Some("github.com"));
+        assert_eq!(versions[1].repo_org.as_deref(), Some("acme"));
+        assert_eq!(versions[1].git_branch.as_deref(), Some("main"));
+
+        std::fs::remove_dir_all(store.root()).ok();
+    }
+
+    #[test]
+    fn latest_summary_does_not_inherit_repository_from_an_older_version() {
+        let mut conn = test_conn();
+        let store = crate::storage::test_store();
+        let recorded = UploadMetadata {
+            repo_org: Some("acme".into()),
+            repo_name: Some("widgets".into()),
+            repo_host: Some("github.com".into()),
+            git_branch: Some("main".into()),
+            ..UploadMetadata::default()
+        };
+
+        let first = record_upload(
+            &mut conn,
+            &store,
+            upload("<title>Test</title>v1", None, &recorded),
+        )
+        .unwrap();
+        record_upload(
+            &mut conn,
+            &store,
+            upload(
+                "<title>Test</title>v2",
+                Some(first.draft_id.clone()),
+                &UploadMetadata::default(),
+            ),
+        )
+        .unwrap();
+
+        let summary = get_draft_summary(&conn, &first.draft_id).unwrap().unwrap();
+        assert_eq!(summary.repo_org, None);
+        assert_eq!(summary.repo_name, None);
+        assert_eq!(summary.repo_host, None);
+        assert_eq!(summary.latest_git_branch, None);
+
+        std::fs::remove_dir_all(store.root()).ok();
+    }
+
+    #[test]
+    fn init_adds_version_repository_columns_to_existing_databases() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE drafts (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                description TEXT,
+                current_version_id TEXT,
+                repo_org TEXT,
+                repo_name TEXT,
+                repo_host TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                deleted_at TEXT,
+                disabled_at TEXT,
+                disabled_reason TEXT
+            );
+            CREATE TABLE draft_versions (id TEXT PRIMARY KEY, draft_id TEXT NOT NULL);
+            INSERT INTO drafts (
+                id, title, current_version_id, repo_org, repo_name, repo_host,
+                created_at, updated_at
+            ) VALUES (
+                'draft-1', 'Legacy', 'version-1', 'acme', 'widgets', 'github.com',
+                '2026-01-01', '2026-01-01'
+            );
+            INSERT INTO draft_versions (id, draft_id) VALUES ('version-1', 'draft-1');
+            "#,
+        )
+        .unwrap();
+
+        init(&conn).unwrap();
+
+        let columns = table_columns(&conn, "draft_versions").unwrap();
+        assert!(columns.iter().any(|column| column == "repo_org"));
+        assert!(columns.iter().any(|column| column == "repo_name"));
+        assert!(columns.iter().any(|column| column == "repo_host"));
+
+        let repository = conn
+            .query_row(
+                "SELECT repo_org, repo_name, repo_host FROM draft_versions WHERE id = 'version-1'",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            repository,
+            ("acme".into(), "widgets".into(), "github.com".into())
+        );
+
+        conn.execute(
+            "UPDATE draft_versions SET repo_org = 'new-owner' WHERE id = 'version-1'",
+            [],
+        )
+        .unwrap();
+        init(&conn).unwrap();
+        let owner: String = conn
+            .query_row(
+                "SELECT repo_org FROM draft_versions WHERE id = 'version-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let schema_version: i64 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(owner, "new-owner");
+        assert_eq!(schema_version, 1);
     }
 
     #[test]
