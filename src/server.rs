@@ -17,7 +17,7 @@ use serde_json::json;
 
 use crate::db::{self, NewUpload, UploadError};
 use crate::pdf::{render_version_pdf, PdfIdentity};
-use crate::policy::{validate_html, DEFAULT_MAX_HTML_BYTES};
+use crate::policy::{validate_html, PolicyOptions, DEFAULT_MAX_HTML_BYTES};
 use crate::render::{render_dashboard, render_not_found};
 use crate::storage::BlobStore;
 use crate::types::{DraftDetail, DraftSummary, UploadMetadata, UploadResponse};
@@ -52,6 +52,26 @@ pub struct ServeArgs {
     /// Maximum accepted HTML size in bytes
     #[arg(long, env = "KERYX_MAX_HTML_BYTES", default_value_t = DEFAULT_MAX_HTML_BYTES)]
     pub max_html_bytes: usize,
+
+    /// Accept <link> tags pointing at Google Fonts, and widen the served CSP
+    /// so those stylesheets and font files actually load
+    #[arg(long, env = "KERYX_ALLOW_FONT_LINKS")]
+    pub allow_font_links: bool,
+
+    /// Accept inline on* handlers whose body is assignment-only, e.g. the
+    /// async-CSS idiom onload="this.media='all'"
+    #[arg(long, env = "KERYX_ALLOW_SAFE_HANDLERS")]
+    pub allow_safe_handlers: bool,
+}
+
+impl ServeArgs {
+    fn policy(&self) -> PolicyOptions {
+        PolicyOptions {
+            max_html_bytes: self.max_html_bytes,
+            allow_font_links: self.allow_font_links,
+            allow_safe_handlers: self.allow_safe_handlers,
+        }
+    }
 }
 
 struct AppState {
@@ -59,7 +79,8 @@ struct AppState {
     store: BlobStore,
     public_base_url: Option<String>,
     api_key_hash: Option<String>,
-    max_html_bytes: usize,
+    policy: PolicyOptions,
+    csp: HeaderValue,
 }
 
 type SharedState = Arc<AppState>;
@@ -87,7 +108,8 @@ pub fn run(args: ServeArgs) -> Result<()> {
             .as_deref()
             .map(|u| u.trim_end_matches('/').to_string()),
         api_key_hash: args.api_key.as_deref().map(crate::sha256_hex),
-        max_html_bytes: args.max_html_bytes,
+        policy: args.policy(),
+        csp: draft_csp(args.allow_font_links),
     });
     let blob_root = state.store.root().join("drafts");
 
@@ -102,6 +124,20 @@ pub fn run(args: ServeArgs) -> Result<()> {
         println!("keryx serving on http://{addr}");
         println!("database: {}", db_path.display());
         println!("blobs: {}", blob_root.display());
+        println!(
+            "policy: max {} bytes{}{}",
+            args.max_html_bytes,
+            if args.allow_font_links {
+                " · Google Font <link> allowed"
+            } else {
+                ""
+            },
+            if args.allow_safe_handlers {
+                " · assignment-only on* handlers allowed"
+            } else {
+                ""
+            }
+        );
         println!(
             "auth: {}",
             if args.api_key.is_some() {
@@ -142,6 +178,21 @@ fn build_router(state: SharedState, max_html_bytes: usize) -> Router {
         .layer(DefaultBodyLimit::max(max_html_bytes * 2 + 64 * 1024))
         .layer(axum::middleware::map_response(common_headers))
         .with_state(state)
+}
+
+/// CSP for served drafts. Scripts never run and the bytes are never altered;
+/// the only knob is whether Google Fonts may be fetched, which has to match the
+/// upload policy or an accepted font `<link>` would be blocked at render time.
+fn draft_csp(allow_font_links: bool) -> HeaderValue {
+    HeaderValue::from_static(if allow_font_links {
+        "default-src 'none'; script-src 'none'; \
+         style-src 'unsafe-inline' https://fonts.googleapis.com; \
+         font-src https://fonts.gstatic.com; img-src https: data:; \
+         connect-src 'none'; base-uri 'none'; form-action 'none'"
+    } else {
+        "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; \
+         img-src https: data:; connect-src 'none'; base-uri 'none'; form-action 'none'"
+    })
 }
 
 async fn common_headers(mut response: Response) -> Response {
@@ -251,7 +302,8 @@ async fn me(State(state): State<SharedState>, headers: HeaderMap) -> Response {
     }
     Json(json!({
         "ok": true,
-        "authRequired": state.api_key_hash.is_some()
+        "authRequired": state.api_key_hash.is_some(),
+        "policy": state.policy
     }))
     .into_response()
 }
@@ -278,7 +330,7 @@ async fn upload(
     }
 
     let html = body.html.unwrap_or_default();
-    let validation = validate_html(&html, state.max_html_bytes);
+    let validation = validate_html(&html, &state.policy);
     if !validation.ok() {
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -614,13 +666,7 @@ fn serve_draft(state: &AppState, draft_id: &str, version: Option<i64>) -> Respon
             };
             let mut response = Html(html).into_response();
             let headers = response.headers_mut();
-            headers.insert(
-                "content-security-policy",
-                HeaderValue::from_static(
-                    "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; \
-                     img-src https: data:; connect-src 'none'; base-uri 'none'; form-action 'none'",
-                ),
-            );
+            headers.insert("content-security-policy", state.csp.clone());
             if let Ok(value) = HeaderValue::from_str(&served.draft_id) {
                 headers.insert("x-keryx-draft-id", value);
             }
@@ -698,7 +744,8 @@ mod tests {
             store,
             public_base_url: Some("https://keryx.test".into()),
             api_key_hash: Some(crate::sha256_hex("secret")),
-            max_html_bytes: DEFAULT_MAX_HTML_BYTES,
+            policy: PolicyOptions::default(),
+            csp: draft_csp(false),
         });
         let metadata = UploadMetadata::default();
         let draft_id = {
