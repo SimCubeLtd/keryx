@@ -393,6 +393,7 @@ mod tests {
             latest_git_commit_subject: Some("Build the dashboard".into()),
             latest_git_dirty: Some(false),
             disabled: false,
+            snoozed_until: None,
             public_url: "https://keryx.test/d/abc123def456".into(),
             raw_url: "https://keryx.test/d/abc123def456/raw".into(),
         }

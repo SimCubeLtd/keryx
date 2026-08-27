@@ -5,15 +5,21 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use chrono::{SecondsFormat, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::ids::{new_draft_id, new_internal_id};
 use crate::storage::BlobStore;
-use crate::types::{DraftSummary, UploadMetadata, VersionInfo};
+use crate::types::{AvailabilityUpdate, DraftSummary, UploadMetadata, VersionInfo};
 
 pub fn now() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+    format_timestamp(Utc::now())
+}
+
+/// Every stored timestamp uses this one shape, so string comparison in SQL
+/// orders correctly and equal instants compare equal.
+pub fn format_timestamp(value: DateTime<Utc>) -> String {
+    value.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 pub fn open(path: &Path) -> Result<Connection> {
@@ -44,7 +50,8 @@ fn init(conn: &Connection) -> Result<()> {
             updated_at TEXT NOT NULL,
             deleted_at TEXT,
             disabled_at TEXT,
-            disabled_reason TEXT
+            disabled_reason TEXT,
+            snoozed_until TEXT
         );
 
         CREATE TABLE IF NOT EXISTS draft_versions (
@@ -119,6 +126,19 @@ fn init(conn: &Connection) -> Result<()> {
             "#,
         )?;
         tx.pragma_update(None, "user_version", 1)?;
+        tx.commit()?;
+    }
+
+    // Schema version 2 adds snooze: a nullable wake time on the draft row.
+    if schema_version < 2 {
+        let tx = conn.unchecked_transaction()?;
+        if !table_columns(&tx, "drafts")?
+            .iter()
+            .any(|column| column == "snoozed_until")
+        {
+            tx.execute("ALTER TABLE drafts ADD COLUMN snoozed_until TEXT", [])?;
+        }
+        tx.pragma_update(None, "user_version", 2)?;
         tx.commit()?;
     }
     Ok(())
@@ -393,57 +413,63 @@ pub fn find_public_version(
     )
 }
 
+const SUMMARY_SELECT: &str = r#"
+    SELECT
+        d.id, d.title, d.description,
+        cv.repo_org,
+        cv.repo_name,
+        cv.repo_host,
+        d.created_at, d.updated_at, d.disabled_at,
+        cv.version_number, cv.created_at, cv.git_branch, cv.git_commit_sha,
+        cv.git_commit_subject, cv.git_dirty,
+        (SELECT COUNT(*) FROM draft_versions v WHERE v.draft_id = d.id),
+        d.snoozed_until
+    FROM drafts d
+    LEFT JOIN draft_versions cv ON cv.id = d.current_version_id
+    WHERE d.deleted_at IS NULL
+"#;
+
+fn read_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<DraftSummary> {
+    Ok(DraftSummary {
+        draft_id: row.get(0)?,
+        title: row.get(1)?,
+        description: row.get(2)?,
+        repo_org: row.get(3)?,
+        repo_name: row.get(4)?,
+        repo_host: row.get(5)?,
+        created_at: row.get(6)?,
+        updated_at: row.get(7)?,
+        disabled: row.get::<_, Option<String>>(8)?.is_some(),
+        latest_version_number: row.get(9)?,
+        latest_version_at: row.get(10)?,
+        latest_git_branch: row.get(11)?,
+        latest_git_commit_sha: row.get(12)?,
+        latest_git_commit_subject: row.get(13)?,
+        latest_git_dirty: row.get(14)?,
+        version_count: row.get(15)?,
+        snoozed_until: row.get(16)?,
+        public_url: String::new(),
+        raw_url: String::new(),
+    })
+}
+
 /// Every live draft, newest first, with the aggregates the dashboard, CLI, and
-/// TUI need. `public_url`/`raw_url` are filled in by the server layer.
+/// TUI need. Snoozed drafts are included; callers derive the display state.
+/// `public_url`/`raw_url` are filled in by the server layer.
 pub fn list_drafts(conn: &Connection) -> Result<Vec<DraftSummary>> {
-    let mut statement = conn.prepare(
-        r#"
-        SELECT
-            d.id, d.title, d.description,
-            cv.repo_org,
-            cv.repo_name,
-            cv.repo_host,
-            d.created_at, d.updated_at, d.disabled_at,
-            cv.version_number, cv.created_at, cv.git_branch, cv.git_commit_sha,
-            cv.git_commit_subject, cv.git_dirty,
-            (SELECT COUNT(*) FROM draft_versions v WHERE v.draft_id = d.id)
-        FROM drafts d
-        LEFT JOIN draft_versions cv ON cv.id = d.current_version_id
-        WHERE d.deleted_at IS NULL
-        ORDER BY d.updated_at DESC
-        "#,
-    )?;
-
-    let rows = statement.query_map([], |row| {
-        Ok(DraftSummary {
-            draft_id: row.get(0)?,
-            title: row.get(1)?,
-            description: row.get(2)?,
-            repo_org: row.get(3)?,
-            repo_name: row.get(4)?,
-            repo_host: row.get(5)?,
-            created_at: row.get(6)?,
-            updated_at: row.get(7)?,
-            disabled: row.get::<_, Option<String>>(8)?.is_some(),
-            latest_version_number: row.get(9)?,
-            latest_version_at: row.get(10)?,
-            latest_git_branch: row.get(11)?,
-            latest_git_commit_sha: row.get(12)?,
-            latest_git_commit_subject: row.get(13)?,
-            latest_git_dirty: row.get(14)?,
-            version_count: row.get(15)?,
-            public_url: String::new(),
-            raw_url: String::new(),
-        })
-    })?;
-
+    let mut statement = conn.prepare(&format!("{SUMMARY_SELECT} ORDER BY d.updated_at DESC"))?;
+    let rows = statement.query_map([], read_summary)?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
 pub fn get_draft_summary(conn: &Connection, draft_id: &str) -> Result<Option<DraftSummary>> {
-    Ok(list_drafts(conn)?
-        .into_iter()
-        .find(|d| d.draft_id == draft_id))
+    Ok(conn
+        .query_row(
+            &format!("{SUMMARY_SELECT} AND d.id = ?1"),
+            params![draft_id],
+            read_summary,
+        )
+        .optional()?)
 }
 
 pub fn list_versions(conn: &Connection, draft_id: &str) -> Result<Vec<VersionInfo>> {
@@ -551,17 +577,118 @@ pub fn purge_deleted_drafts(conn: &mut Connection) -> Result<(usize, Vec<String>
     Ok((removed, keys))
 }
 
-pub fn disable_draft(conn: &Connection, draft_id: &str, reason: &str) -> Result<bool> {
+#[derive(Debug)]
+pub enum AvailabilityError {
+    DraftNotFound,
+    InvalidWakeTime(String),
+    Other(anyhow::Error),
+}
+
+impl std::fmt::Display for AvailabilityError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AvailabilityError::DraftNotFound => write!(f, "Draft not found."),
+            AvailabilityError::InvalidWakeTime(message) => write!(f, "{message}"),
+            AvailabilityError::Other(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for AvailabilityError {}
+
+impl From<rusqlite::Error> for AvailabilityError {
+    fn from(e: rusqlite::Error) -> Self {
+        AvailabilityError::Other(e.into())
+    }
+}
+
+impl From<anyhow::Error> for AvailabilityError {
+    fn from(e: anyhow::Error) -> Self {
+        AvailabilityError::Other(e)
+    }
+}
+
+/// Accept any RFC 3339 wake time, store it as UTC with milliseconds, and
+/// reject anything that is not strictly in the future.
+pub fn normalize_wake_time(value: &str, now: DateTime<Utc>) -> Result<String, AvailabilityError> {
+    let until = DateTime::parse_from_rfc3339(value.trim())
+        .map_err(|_| {
+            AvailabilityError::InvalidWakeTime(
+                "Wake time must be an RFC 3339 timestamp, e.g. 2026-08-28T08:00:00Z.".into(),
+            )
+        })?
+        .with_timezone(&Utc);
+    if until <= now {
+        return Err(AvailabilityError::InvalidWakeTime(
+            "Wake time must be in the future.".into(),
+        ));
+    }
+    Ok(format_timestamp(until))
+}
+
+pub const DEFAULT_DISABLE_REASON: &str = "Disabled by owner.";
+
+/// The one mutation that changes availability. Each state clears the fields
+/// of the others, so a row is never both snoozed and disabled, and every
+/// manual transition bumps `updated_at`. Returns the updated summary.
+pub fn set_availability(
+    conn: &mut Connection,
+    draft_id: &str,
+    update: &AvailabilityUpdate,
+) -> Result<DraftSummary, AvailabilityError> {
+    let tx = conn.transaction()?;
     let timestamp = now();
-    let changed = conn.execute(
-        r#"
-        UPDATE drafts
-        SET disabled_at = ?1, disabled_reason = ?2, updated_at = ?1
-        WHERE id = ?3 AND deleted_at IS NULL
-        "#,
-        params![timestamp, reason, draft_id],
-    )?;
-    Ok(changed > 0)
+
+    let exists = tx
+        .query_row(
+            "SELECT 1 FROM drafts WHERE id = ?1 AND deleted_at IS NULL",
+            params![draft_id],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if !exists {
+        return Err(AvailabilityError::DraftNotFound);
+    }
+
+    match update {
+        AvailabilityUpdate::Active => {
+            tx.execute(
+                r#"
+                UPDATE drafts
+                SET disabled_at = NULL, disabled_reason = NULL, snoozed_until = NULL, updated_at = ?1
+                WHERE id = ?2
+                "#,
+                params![timestamp, draft_id],
+            )?;
+        }
+        AvailabilityUpdate::Snoozed { until } => {
+            let until = normalize_wake_time(until, Utc::now())?;
+            tx.execute(
+                r#"
+                UPDATE drafts
+                SET disabled_at = NULL, disabled_reason = NULL, snoozed_until = ?1, updated_at = ?2
+                WHERE id = ?3
+                "#,
+                params![until, timestamp, draft_id],
+            )?;
+        }
+        AvailabilityUpdate::Disabled { reason } => {
+            let reason = reason.as_deref().unwrap_or(DEFAULT_DISABLE_REASON);
+            tx.execute(
+                r#"
+                UPDATE drafts
+                SET disabled_at = ?1, disabled_reason = ?2, snoozed_until = NULL, updated_at = ?1
+                WHERE id = ?3
+                "#,
+                params![timestamp, reason, draft_id],
+            )?;
+        }
+    }
+
+    let summary = get_draft_summary(&tx, draft_id)?.ok_or(AvailabilityError::DraftNotFound)?;
+    tx.commit()?;
+    Ok(summary)
 }
 
 #[cfg(test)]
@@ -822,6 +949,14 @@ mod tests {
         assert!(columns.iter().any(|column| column == "repo_org"));
         assert!(columns.iter().any(|column| column == "repo_name"));
         assert!(columns.iter().any(|column| column == "repo_host"));
+        let draft_columns = table_columns(&conn, "drafts").unwrap();
+        assert!(draft_columns.iter().any(|column| column == "snoozed_until"));
+        let legacy_title: String = conn
+            .query_row("SELECT title FROM drafts WHERE id = 'draft-1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(legacy_title, "Legacy");
 
         let repository = conn
             .query_row(
@@ -858,7 +993,101 @@ mod tests {
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
         assert_eq!(owner, "new-owner");
-        assert_eq!(schema_version, 1);
+        assert_eq!(schema_version, 2);
+    }
+
+    #[test]
+    fn availability_transitions_are_exclusive_and_validated() {
+        let mut conn = test_conn();
+        let store = crate::storage::test_store();
+        let meta = UploadMetadata::default();
+        let draft_id = record_upload(
+            &mut conn,
+            &store,
+            upload("<title>Test</title>v1", None, &meta),
+        )
+        .unwrap()
+        .draft_id;
+
+        assert!(matches!(
+            set_availability(&mut conn, "missing", &AvailabilityUpdate::Active),
+            Err(AvailabilityError::DraftNotFound)
+        ));
+
+        let snoozed = set_availability(
+            &mut conn,
+            &draft_id,
+            &AvailabilityUpdate::Snoozed {
+                until: "2099-01-01T09:00:00+01:00".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            snoozed.snoozed_until.as_deref(),
+            Some("2099-01-01T08:00:00.000Z")
+        );
+        assert!(!snoozed.disabled);
+        assert!(find_public_version(&conn, &draft_id, None)
+            .unwrap()
+            .is_some());
+        assert!(find_public_version(&conn, &draft_id, Some(1))
+            .unwrap()
+            .is_some());
+
+        for bad in ["2000-01-01T00:00:00Z", "tomorrow", ""] {
+            assert!(matches!(
+                set_availability(
+                    &mut conn,
+                    &draft_id,
+                    &AvailabilityUpdate::Snoozed { until: bad.into() }
+                ),
+                Err(AvailabilityError::InvalidWakeTime(_))
+            ));
+        }
+
+        // A rejected transition leaves the previous state untouched, and a
+        // new version never changes availability.
+        record_upload(
+            &mut conn,
+            &store,
+            upload("<title>Test</title>v2", Some(draft_id.clone()), &meta),
+        )
+        .unwrap();
+        let unchanged = get_draft_summary(&conn, &draft_id).unwrap().unwrap();
+        assert_eq!(
+            unchanged.snoozed_until.as_deref(),
+            Some("2099-01-01T08:00:00.000Z")
+        );
+
+        let disabled = set_availability(
+            &mut conn,
+            &draft_id,
+            &AvailabilityUpdate::Disabled { reason: None },
+        )
+        .unwrap();
+        assert!(disabled.disabled);
+        assert_eq!(disabled.snoozed_until, None);
+        assert!(find_public_version(&conn, &draft_id, None)
+            .unwrap()
+            .is_none());
+
+        let resnoozed = set_availability(
+            &mut conn,
+            &draft_id,
+            &AvailabilityUpdate::Snoozed {
+                until: "2099-06-01T00:00:00Z".into(),
+            },
+        )
+        .unwrap();
+        assert!(!resnoozed.disabled);
+        assert!(resnoozed.snoozed_until.is_some());
+
+        let active = set_availability(&mut conn, &draft_id, &AvailabilityUpdate::Active).unwrap();
+        assert!(!active.disabled);
+        assert_eq!(active.snoozed_until, None);
+        assert!(active.updated_at >= resnoozed.updated_at);
+
+        std::fs::remove_dir_all(store.root()).ok();
     }
 
     #[test]

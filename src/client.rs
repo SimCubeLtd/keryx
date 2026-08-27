@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::policy::PolicyOptions;
-use crate::types::{DraftDetail, DraftSummary, UploadResponse};
+use crate::types::{AvailabilityUpdate, DraftDetail, DraftSummary, UploadResponse};
 
 pub const DEFAULT_API_URL: &str = "http://localhost:7812";
 
@@ -233,6 +233,28 @@ impl Api {
     pub fn draft(&self, draft_id: &str) -> Result<DraftDetail> {
         let response = self
             .request(reqwest::Method::GET, &format!("/api/drafts/{draft_id}"))
+            .send()?;
+        let body = Self::json_body(response)?;
+        let draft = body
+            .get("draft")
+            .cloned()
+            .ok_or_else(|| anyhow!("response is missing \"draft\""))?;
+        Ok(serde_json::from_value(draft)?)
+    }
+
+    /// Move a draft between active, snoozed, and disabled. Returns the
+    /// draft as the server now sees it.
+    pub fn set_availability(
+        &self,
+        draft_id: &str,
+        update: &AvailabilityUpdate,
+    ) -> Result<DraftSummary> {
+        let response = self
+            .request(
+                reqwest::Method::PUT,
+                &format!("/api/drafts/{draft_id}/availability"),
+            )
+            .json(update)
             .send()?;
         let body = Self::json_body(response)?;
         let draft = body
