@@ -33,10 +33,19 @@ rewriting, no consent interstitials — to whoever holds the URL.
   immutable version as a paginated A4 PDF. `--version <n>` selects an older
   version. The browser-free Fulgur renderer runs on the server, returns bytes
   without storing a PDF, and the client writes the destination atomically.
-- **Browse** — a server-rendered dashboard at `/` with search, filters, a
-  selected-draft pane, downloads, and prune controls. The dashboard defaults
-  to the system color scheme and supports light and dark overrides. The
-  `keryx list` command and `keryx tui` provide terminal interfaces.
+- **Browse** — a server-rendered dashboard at `/` organised by availability
+  (Active, Snoozed, Disabled) with search, repository filtering, a
+  selected-draft pane, downloads, snooze and disable controls, and prune
+  controls. The dashboard defaults to the system color scheme and supports
+  light and dark overrides. The `keryx list` command and `keryx tui` provide
+  terminal interfaces.
+- **Snooze** — `keryx snooze <id> --for 2h` parks a draft until a wake time
+  without touching its links; `keryx disable <id>` is the only state that
+  stops serving. See [Availability](#availability).
+- **Notify** — installed as an app over HTTPS, Keryx sends a Web Push
+  notification when a plan is published, revised, wakes, or is enabled or
+  disabled, even while the dashboard is closed. See
+  [Installable app and notifications](#installable-app-and-notifications).
 - **Stay small** — one binary, a SQLite index for metadata (default
   `~/.keryx/keryx.db`), and the HTML stored as plain files on disk (default
   `~/.keryx/drafts/<draft-id>/<version-id>.html`) — easy to inspect, grep,
@@ -67,27 +76,36 @@ keryx serve
 | `--allow-font-links` / `KERYX_ALLOW_FONT_LINKS` | off | Accept `<link>` to Google Fonts, and widen the served CSP to match |
 | `--allow-safe-handlers` / `KERYX_ALLOW_SAFE_HANDLERS` | off | Accept assignment-only inline `on*` handlers |
 | `--allow-inline-scripts` / `KERYX_ALLOW_INLINE_SCRIPTS` | off | Serve with `script-src 'unsafe-inline'` so inline scripts actually run |
+| `--push-contact` / `KERYX_PUSH_CONTACT` | HTTPS public base URL, else `mailto:keryx@localhost` | VAPID contact push services may use about this server's traffic |
 
-With `KERYX_API_KEY` set, uploads, API listings, deletes, and PDF publication
-require the key as a Bearer token; draft serving stays public. The dashboard at
-`/` remains public, but redacts Git provenance and directs management and PDF
-work to the authenticated CLI. With no key, everything is open, including the
-dashboard controls. This is suitable for a trusted LAN.
+With `KERYX_API_KEY` set, uploads, API listings, deletes, availability
+changes, push subscriptions, and PDF publication require the key as a Bearer
+token; draft serving stays public. The dashboard at `/` remains public, but
+redacts Git provenance, hides every mutation control, and directs management
+and PDF work to the authenticated CLI. With no key, everything is open,
+including the dashboard controls. This is suitable for a trusted LAN.
 
 Routes: `POST /api/uploads`, `GET/DELETE /api/drafts[/:id]`,
 `GET /api/drafts/:id/pdf[?version=n]`
-(`DELETE ...?purge=true` for a hard delete), `POST /api/drafts/:id/disable`,
-`POST /api/purge`, `GET /d/:id[/raw]`, `GET /d/:id/v/:n[/raw]`,
-`GET /healthz`.
+(`DELETE ...?purge=true` for a hard delete),
+`PUT /api/drafts/:id/availability`, `POST /api/drafts/:id/disable`
+(compatibility adapter over the availability route), `POST /api/purge`,
+`GET /api/push/vapid`, `PUT/DELETE /api/push/subscriptions`,
+`GET /d/:id[/raw]`, `GET /d/:id/v/:n[/raw]`, `GET /manifest.webmanifest`,
+`GET /sw.js`, `GET /healthz`.
 
 ## CLI
 
 ```sh
 keryx upload ./plan.html --description "Q3 migration plan"
-keryx list [--json]
+keryx list [--json] [--include-snoozed | --snoozed]
 keryx raw <draft-id> [-v N]        # exact HTML to stdout
 keryx publish --id <draft-id> --output ./report.pdf [--version N]
 keryx open <draft-id>              # open in browser
+keryx snooze <draft-id> --for 2h   # or --until 2026-08-28T08:00:00Z
+keryx unsnooze <draft-id>
+keryx disable <draft-id> [--reason "Superseded"]
+keryx enable <draft-id>
 keryx delete <draft-id> [--yes]    # soft delete: stops serving, keeps data
 keryx delete <draft-id> --purge    # hard delete: removes rows and files, no undo
 keryx purge [--yes]                # hard-delete everything already soft-deleted
@@ -111,6 +129,78 @@ optional version, never arbitrary HTML. The server resolves that stored HTML,
 adds a title/version header and publication-date/page footer to a render-only
 copy, and returns the PDF without creating a new Keryx version or writing a PDF
 on the server. The CLI refuses to overwrite an existing output file.
+
+## Availability
+
+Every live draft is in exactly one of three states:
+
+| State | Dashboard | Public, raw, versioned, and PDF routes |
+| --- | --- | --- |
+| Active | Default tab | Serve |
+| Snoozed | Snoozed tab until the wake time | Serve |
+| Disabled | Disabled tab | 404 |
+
+Snooze affects attention, not access. `keryx snooze <id> --for 45m|2h|3d|1w`
+(units combine, e.g. `1h30m`) or `--until <RFC 3339>` hides the draft from
+`keryx list` and the Active tab until the wake time; the server stores the
+time as UTC with milliseconds and rejects anything not in the future. A draft
+wakes by the clock: once `snoozedUntil` has passed it is active again with no
+database write and no cleanup job. `keryx unsnooze` wakes it now, `disable`
+stops serving (and clears any snooze), and `enable` serves it again. One
+mutation owns every transition, so a draft is never both snoozed and disabled.
+Uploading a new version never changes availability.
+
+`keryx list` hides snoozed drafts by default; `--include-snoozed` shows every
+live draft and `--snoozed` shows only the sleeping ones. `DraftSummary` on the
+wire carries `disabled` and an optional `snoozedUntil`; clients derive the
+state from those two fields and the current time.
+
+The dashboard opens on Active. `/?draft=<id>&view=snoozed` deep-links to a tab
+and draft. The selected pane offers Snooze (with presets or a custom wake
+time), Unsnooze, Disable, or Enable; with an API key set those controls are
+absent and the authenticated CLI is the management path.
+
+## Installable app and notifications
+
+Keryx serves a web app manifest, a service worker, and icons on every
+deployment. What activates is decided by the browser's real origin:
+
+- On an HTTPS origin (for example a Tailscale Serve hostname proxying to the
+  local server, or a reverse proxy with a certificate) a supported browser
+  offers **Install Keryx** in the top bar and the **Notifications** control
+  can subscribe the device to Web Push.
+- On plain HTTP the dashboard works as before and those controls stay hidden.
+
+The service worker handles push display and notification clicks only. It
+never intercepts requests and keeps no cache, so drafts are always served
+live. A notification click accepts only a same-origin path and focuses and
+navigates an existing Keryx window, or opens one.
+
+Notification types are **Plan published** (first upload, opens `/d/:id`),
+**Plan revised** (later upload, opens the immutable `/d/:id/v/:n`), **Plan
+woke** (a snooze expired, opens the draft), **Plan enabled**, and **Plan
+disabled** (open the matching dashboard tab). Snoozing and unsnoozing are the
+owner's own attention management and produce no event. PDF publication and
+download never create an event. Each device chooses which types it receives
+from the Notifications control; preferences are stored per subscription.
+
+Delivery is store-first: an event is written in the same SQLite transaction
+as the draft change and queued once per opted-in subscription, then a
+background dispatcher sends it, retries temporary push-service failures with
+doubling delays, and removes subscriptions the service reports as expired.
+A wake is keyed by its snooze timestamp, so it is sent exactly once even if
+the server restarts around the wake time; the dispatcher rebuilds its
+schedule on startup. The server's VAPID key pair is created on first run at
+`<data-dir>/vapid.json` (owner-readable only) and reused thereafter; changing
+it invalidates every subscription. Payload encryption and VAPID signing come
+from the `web-push-native` crate, never from Keryx itself, and payloads carry
+only display text and a same-origin path.
+
+With `KERYX_API_KEY` set the dashboard cannot subscribe (it is read-only), so
+push stays unavailable on protected deployments until Keryx has browser
+authentication. Denied or unsupported notification permission never blocks
+snoozing: the dashboard moves an expired snooze back to Active on its own and
+shows an in-page toast while it is open.
 
 ## TUI
 
