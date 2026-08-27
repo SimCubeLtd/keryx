@@ -82,7 +82,7 @@ fn render_row(draft: &DraftSummary, selected: bool, management_enabled: bool) ->
 
     format!(
         r#"<tr class="draft-row{selected_class}" tabindex="0" role="option" aria-selected="{selected}" data-draft-id="{id}" data-title="{title}" data-description="{description}" data-repository="{repository}" data-repo-host="{repo_host}" data-branch="{branch}" data-commit-sha="{commit_sha}" data-commit-subject="{commit_subject}" data-updated="{updated}" data-latest-version="{version}" data-version-count="{version_count}" data-disabled="{disabled}" data-provenance-recorded="{provenance_recorded}" data-public-url="{public_url}" data-search="{search}">
-  <td><div class="draft-title"><a href="{public_url}">{title}</a></div><div class="draft-description">{status_prefix}{description_display}</div></td>
+  <td><div class="draft-title"><a href="{public_url}" target="_blank" rel="noopener noreferrer">{title}</a></div><div class="draft-description">{status_prefix}{description_display}</div></td>
   <td><div class="source{missing_class}">{repository}</div><div class="branch">{branch}</div></td>
   <td><div class="updated" title="{updated}">{updated}</div><div class="version">v{version} · {version_count} {version_word}</div></td>
   <td class="row-action">
@@ -90,7 +90,7 @@ fn render_row(draft: &DraftSummary, selected: bool, management_enabled: bool) ->
       <summary aria-label="Actions for {title}">•••</summary>
       <div class="menu">
         <div class="menu-group">
-          <a class="menu-item" href="{public_url}"><span class="menu-icon">↗</span><span class="menu-label">Open document</span></a>
+          <a class="menu-item" href="{public_url}" target="_blank" rel="noopener noreferrer"><span class="menu-icon">↗</span><span class="menu-label">Open document</span></a>
           <a class="menu-item" href="{raw_url}"><span class="menu-icon">⌁</span><span class="menu-label">View raw HTML</span></a>
         </div>
         {protected_actions}
@@ -170,7 +170,7 @@ fn render_detail(draft: Option<&DraftSummary>, management_enabled: bool) -> Stri
     let version = draft.latest_version_number.unwrap_or(0);
     let detail_actions = if management_enabled {
         format!(
-            r#"<a class="button primary" id="detail-open" href="{public_url}" aria-disabled="{disabled}">Open document ↗</a>
+            r#"<a class="button primary" id="detail-open" href="{public_url}" target="_blank" rel="noopener noreferrer" aria-disabled="{disabled}">Open document ↗</a>
     <a class="button" id="detail-pdf" href="/api/drafts/{id}/pdf" download aria-disabled="{disabled}">Download PDF</a>"#,
             public_url = escape_html(&draft.public_url),
             disabled = draft.disabled,
@@ -178,7 +178,7 @@ fn render_detail(draft: Option<&DraftSummary>, management_enabled: bool) -> Stri
         )
     } else {
         format!(
-            r#"<a class="button primary" id="detail-open" href="{public_url}" aria-disabled="{disabled}">Open document ↗</a>"#,
+            r#"<a class="button primary" id="detail-open" href="{public_url}" target="_blank" rel="noopener noreferrer" aria-disabled="{disabled}">Open document ↗</a>"#,
             public_url = escape_html(&draft.public_url),
             disabled = draft.disabled,
         )
@@ -409,6 +409,9 @@ mod tests {
         assert!(html.contains("Prune draft"));
         assert!(html.contains("Force prune"));
         assert!(html.contains("<option value=\"system\">System</option>"));
+        assert!(html.contains("href=\"https://keryx.test/d/abc123def456\" target=\"_blank\" rel=\"noopener noreferrer\""));
+        assert!(html.contains("item.href = \"/d/\" + encodeURIComponent(draftId) + \"/v/\""));
+        assert!(html.contains("Load \" + remaining + \" older \""));
         assert!(!html.contains("Dashboard <direction>"));
         assert!(html.contains("Dashboard &lt;direction&gt;"));
     }
