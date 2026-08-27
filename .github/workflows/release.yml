@@ -1,193 +1,30 @@
 name: release
+run-name: queue release build for ${{ github.event.release.tag_name }}
 
-# Only a *published* release runs this. Not a tag push: a tag can be pushed by accident, moved, or
-# created by tooling, whereas publishing a release is a deliberate act with a human behind it. The
-# ref comes from the release event, so this workflow never guesses which commit it is building —
-# every job checks out `github.event.release.tag_name` explicitly.
+# GitHub isolates caches by branch or tag. Release events run in the tag's
+# scope, so building here would create a cache that no later release can read.
+# Dispatch the actual build from the default branch instead; that workflow
+# still checks out and verifies this exact immutable tag.
 on:
   release:
     types: [published]
-  # Re-run against a release that is already published. Needed because re-running a failed run
-  # replays the *workflow file from the tag*, so a fix landed after the tag could never take
-  # effect. Dispatching from `main` uses this file while still building the tag's code.
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "Existing release tag to build and attach assets to, e.g. v0.1.0"
-        required: true
 
-# Needed to attach assets to the release. Nothing here writes to the repository itself.
 permissions:
-  contents: write
-
-env:
-  CARGO_TERM_COLOR: always
+  actions: write
+  contents: read
 
 jobs:
-  # A release published from an arbitrary tag has not necessarily been through CI, so the tests
-  # run once here before anything is packaged. This is the full suite — keryx needs no external
-  # tool or service, so a green release means "the tag builds and its tests pass" without
-  # qualification.
-  verify:
-    name: verify the tag
+  dispatch:
+    name: queue the cached build
     runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.release.tag_name || github.event.inputs.tag }}
-
-      - name: Tag must match the declared version
-        id: version
-        # Via env rather than direct interpolation: a tag name is attacker-controllable text and
-        # must not be pasted into a shell.
-        env:
-          TAG: ${{ github.event.release.tag_name || github.event.inputs.tag }}
-        run: |
-          set -euo pipefail
-          version="${TAG#v}"
-          declared=$(grep -m1 -E '^version *= *"' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
-          if [ "$version" != "$declared" ]; then
-            echo "::error::release tag '$TAG' implies version $version, but Cargo.toml declares \
-          $declared. Publishing this would attach artefacts whose names disagree with their \
-          contents."
-            exit 1
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "building $version from tag $TAG"
-
-      - uses: dtolnay/rust-toolchain@nightly
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo test
-
-  package:
-    name: package (${{ matrix.target }})
-    needs: verify
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            archive: tar.gz
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            archive: tar.gz
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            archive: zip
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.release.tag_name || github.event.inputs.tag }}
-
-      - uses: dtolnay/rust-toolchain@nightly
-        with:
-          targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
-
-      - run: cargo build --release --target ${{ matrix.target }}
-
-      # The binary is the whole deliverable — server, CLI, and TUI in one executable with SQLite
-      # bundled, so there is no support tree to find at runtime. The skill and README ride along
-      # in the archive to be read by humans and agents, not by keryx itself.
-      - name: Stage the distributable
-        shell: bash
-        env:
-          VERSION: ${{ needs.verify.outputs.version }}
-          TARGET: ${{ matrix.target }}
-        run: |
-          set -euo pipefail
-          name="keryx-${VERSION}-${TARGET}"
-          exe="keryx"
-          [ "${RUNNER_OS}" = "Windows" ] && exe="keryx.exe"
-
-          mkdir -p "dist/${name}/bin"
-          cp "target/${TARGET}/release/${exe}" "dist/${name}/bin/"
-          cp -r skills "dist/${name}/"
-          cp README.md LICENSE "dist/${name}/"
-
-          echo "ASSET_NAME=${name}" >> "$GITHUB_ENV"
-          echo "ASSET_EXE=${exe}" >> "$GITHUB_ENV"
-
-      # Proves the staged binary actually works rather than trusting that it does: from a scratch
-      # directory with no repository anywhere above it, serve on an explicit database and data
-      # directory, publish a draft through the real CLI upload path, and assert the served bytes
-      # match the uploaded file exactly — the byte-for-byte contract the tool exists to keep.
-      - name: The staged binary must serve a round trip with no repository present
-        shell: bash
-        run: |
-          set -euo pipefail
-          root="$(pwd)"
-          bin="${root}/dist/${ASSET_NAME}/bin/${ASSET_EXE}"
-          work="$(mktemp -d)"
-          cd "$work"
-
-          "$bin" --version
-
-          printf '<!doctype html><html><head><title>Release Check</title></head><body><p>keryx</p></body></html>' > draft.html
-
-          "$bin" serve --port 3777 --db "$work/keryx.db" --data-dir "$work/data" &
-          server=$!
-          trap 'kill "$server" 2>/dev/null || true' EXIT
-
-          for _ in $(seq 1 30); do
-            curl -fsS http://127.0.0.1:3777/healthz > /dev/null 2>&1 && break
-            sleep 1
-          done
-          curl -fsS http://127.0.0.1:3777/healthz > /dev/null
-
-          out=$("$bin" upload draft.html --api-url http://127.0.0.1:3777)
-          printf '%s\n' "$out"
-          raw=$(printf '%s\n' "$out" | sed -n 's/^Raw HTML: //p')
-
-          curl -fsS "$raw" > served.html
-          if ! cmp -s draft.html served.html; then
-            echo "::error::the staged binary did not serve the uploaded draft byte for byte"
-            exit 1
-          fi
-          echo "ok: upload/serve round trip is byte-exact"
-
-          # The blob must land under the configured data directory, not anywhere else.
-          if ! find "$work/data/drafts" -name '*.html' | grep -q .; then
-            echo "::error::no blob was written under the configured --data-dir"
-            exit 1
-          fi
-          echo "ok: blobs are stored under --data-dir"
-
-      - name: Archive and checksum
-        shell: bash
-        env:
-          ARCHIVE: ${{ matrix.archive }}
-        run: |
-          set -euo pipefail
-          cd dist
-          if [ "$ARCHIVE" = "zip" ]; then
-            7z a -tzip "${ASSET_NAME}.zip" "${ASSET_NAME}" > /dev/null
-            file="${ASSET_NAME}.zip"
-          else
-            tar -czf "${ASSET_NAME}.tar.gz" "${ASSET_NAME}"
-            file="${ASSET_NAME}.tar.gz"
-          fi
-          if command -v sha256sum > /dev/null; then
-            sha256sum "$file" > "${file}.sha256"
-          else
-            shasum -a 256 "$file" > "${file}.sha256"
-          fi
-          cat "${file}.sha256"
-          echo "ASSET_FILE=${file}" >> "$GITHUB_ENV"
-
-      - name: Attach to the release
-        shell: bash
+      - name: Build and attach this release from the default branch
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.release.tag_name || github.event.inputs.tag }}
-        run: |
-          set -euo pipefail
-          gh release upload "$TAG" \
-            "dist/${ASSET_FILE}" \
-            "dist/${ASSET_FILE}.sha256" \
-            --clobber
+          TAG: ${{ github.event.release.tag_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: >-
+          gh workflow run release-build.yml
+          --repo "$GITHUB_REPOSITORY"
+          --ref "$DEFAULT_BRANCH"
+          --field "tag=$TAG"
