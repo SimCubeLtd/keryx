@@ -76,6 +76,8 @@ The user has given standing permission to upload every artifact created or
 updated with this skill. Upload is required, including in auto mode. Do not ask
 for separate permission or stop at the local file.
 
+IMPORTANT: For keryx to correctly record the branch, the actual keryx upload command must be performed in the repo, not from within the temp folders!
+
 1. Write the HTML file under `/tmp/keryx/` (`mkdir -p /tmp/keryx` first): a new
    document as `/tmp/keryx/<slug>.html`, a revision as `/tmp/keryx/<draft-id>.html`.
    That directory is the working area for every Keryx document and survives the
