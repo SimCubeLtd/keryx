@@ -17,6 +17,14 @@ pub struct DraftSummary {
     pub created_at: String,
     pub updated_at: String,
     pub latest_version_at: Option<String>,
+    #[serde(default)]
+    pub latest_git_branch: Option<String>,
+    #[serde(default)]
+    pub latest_git_commit_sha: Option<String>,
+    #[serde(default)]
+    pub latest_git_commit_subject: Option<String>,
+    #[serde(default)]
+    pub latest_git_dirty: Option<bool>,
     pub disabled: bool,
     #[serde(default)]
     pub public_url: String,
@@ -30,6 +38,12 @@ pub struct VersionInfo {
     pub id: String,
     pub version_number: i64,
     pub created_at: String,
+    #[serde(default)]
+    pub repo_org: Option<String>,
+    #[serde(default)]
+    pub repo_name: Option<String>,
+    #[serde(default)]
+    pub repo_host: Option<String>,
     pub git_branch: Option<String>,
     pub git_commit_sha: Option<String>,
     pub git_commit_subject: Option<String>,

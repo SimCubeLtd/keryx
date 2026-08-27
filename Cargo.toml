@@ -1,6 +1,6 @@
 [package]
 name = "keryx"
-version = "0.3.1"
+version = "0.4.0"
 edition = "2021"
 license = "MIT"
 description = "Keryx (κῆρυξ): a self-hosted herald for agents — publish static HTML drafts via server, CLI, and TUI."

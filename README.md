@@ -33,8 +33,10 @@ rewriting, no consent interstitials — to whoever holds the URL.
   immutable version as a paginated A4 PDF. `--version <n>` selects an older
   version. The browser-free Fulgur renderer runs on the server, returns bytes
   without storing a PDF, and the client writes the destination atomically.
-- **Browse** — a server-rendered dashboard at `/`, a `keryx list` command, and
-  a full TUI (`keryx tui`) for browsing, opening, and deleting drafts.
+- **Browse** — a server-rendered dashboard at `/` with search, filters, a
+  selected-draft pane, downloads, and prune controls. The dashboard defaults
+  to the system color scheme and supports light and dark overrides. The
+  `keryx list` command and `keryx tui` provide terminal interfaces.
 - **Stay small** — one binary, a SQLite index for metadata (default
   `~/.keryx/keryx.db`), and the HTML stored as plain files on disk (default
   `~/.keryx/drafts/<draft-id>/<version-id>.html`) — easy to inspect, grep,
@@ -66,10 +68,11 @@ keryx serve
 | `--allow-safe-handlers` / `KERYX_ALLOW_SAFE_HANDLERS` | off | Accept assignment-only inline `on*` handlers |
 | `--allow-inline-scripts` / `KERYX_ALLOW_INLINE_SCRIPTS` | off | Serve with `script-src 'unsafe-inline'` so inline scripts actually run |
 
-With `KERYX_API_KEY` set, uploads, listings, deletes, and PDF publication
-require the key as a Bearer token; draft serving stays public. With no key, everything is open —
-fine on a trusted LAN. The dashboard at `/` is public either way (it is meant
-for your own machine).
+With `KERYX_API_KEY` set, uploads, API listings, deletes, and PDF publication
+require the key as a Bearer token; draft serving stays public. The dashboard at
+`/` remains public, but redacts Git provenance and directs management and PDF
+work to the authenticated CLI. With no key, everything is open, including the
+dashboard controls. This is suitable for a trusted LAN.
 
 Routes: `POST /api/uploads`, `GET/DELETE /api/drafts[/:id]`,
 `GET /api/drafts/:id/pdf[?version=n]`
@@ -98,9 +101,10 @@ once with `keryx auth set <key> --api-url http://myhost:7812` (or edit
 `~/.keryx/config.json`).
 
 Re-uploading the same file path updates the same draft as a new version;
-`--new` forces a fresh draft, `--draft <id>` targets a specific one. Uploads
-also record best-effort git provenance (branch, commit, dirty state, repo)
-for display in listings — never for authorization.
+`--new` forces a fresh draft, `--draft <id>` targets a specific one. Each
+upload records best-effort Git provenance from the directory where you run
+`keryx upload`. Every version stores its repository, branch, commit, and dirty
+state for display and audit. Keryx never uses provenance for authorization.
 
 `publish` is deliberately Keryx-specific: the endpoint accepts a draft ID and
 optional version, never arbitrary HTML. The server resolves that stored HTML,

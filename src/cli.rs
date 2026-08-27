@@ -143,7 +143,11 @@ pub fn upload(args: UploadArgs) -> Result<()> {
         args.draft.clone().or(known_draft_id)
     };
 
-    let metadata = gitmeta::collect(file.parent().unwrap_or_else(|| std::path::Path::new(".")));
+    // Provenance describes the checkout the upload was invoked from. HTML
+    // communication workflows deliberately keep their artifact under /tmp,
+    // so discovering Git from the file's parent loses the repository context.
+    let invocation_dir = std::env::current_dir().context("reading the current directory")?;
+    let metadata = gitmeta::collect(&invocation_dir);
     let filename = file
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
