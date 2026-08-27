@@ -8,6 +8,7 @@ use crate::types::DraftSummary;
 
 const DASHBOARD_CSS: &str = include_str!("../assets/dashboard.css");
 const DASHBOARD_JS: &str = include_str!("../assets/dashboard.js");
+const KERYX_LOGO: &str = include_str!("../assets/keryx-logo.svg");
 
 pub fn escape_html(value: &str) -> String {
     value
@@ -295,7 +296,7 @@ pub fn render_dashboard(
 </head>
 <body data-management-enabled="{management_enabled}">
   <header class="topbar">
-    <div class="brand"><span class="brand-mark">κ</span>Keryx</div>
+    <div class="brand"><span class="brand-mark">{KERYX_LOGO}</span>Keryx</div>
     <div class="topbar-tools">
       {management_note}
       <a class="health" href="/healthz">Server healthy</a>
@@ -409,6 +410,9 @@ mod tests {
         assert!(html.contains("Prune draft"));
         assert!(html.contains("Force prune"));
         assert!(html.contains("<option value=\"system\">System</option>"));
+        assert!(html.contains("<svg"));
+        assert!(html.contains("Keryx Dispatch"));
+        assert!(!html.contains("<span class=\"brand-mark\">κ</span>"));
         assert!(html.contains("href=\"https://keryx.test/d/abc123def456\" target=\"_blank\" rel=\"noopener noreferrer\""));
         assert!(html.contains("item.href = \"/d/\" + encodeURIComponent(draftId) + \"/v/\""));
         assert!(html.contains("Load \" + remaining + \" older \""));
