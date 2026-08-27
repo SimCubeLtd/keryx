@@ -582,6 +582,36 @@
     window.setTimeout(function () { toast.hidden = true; }, 4200);
   }
 
+  // --- installable app --------------------------------------------------
+  // The browser's real origin decides: the worker registers only in a secure
+  // context and the install action appears only when the browser offers it.
+  // Plain HTTP keeps the ordinary dashboard.
+
+  var installButton = document.getElementById("install-app");
+  var installPrompt = null;
+  if (window.isSecureContext && "serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/sw.js").catch(function (error) {
+      console.warn("Keryx service worker unavailable:", error);
+    });
+  }
+  window.addEventListener("beforeinstallprompt", function (event) {
+    event.preventDefault();
+    installPrompt = event;
+    installButton.hidden = false;
+  });
+  installButton.addEventListener("click", function () {
+    if (!installPrompt) return;
+    installPrompt.prompt();
+    installPrompt.userChoice.finally(function () {
+      installPrompt = null;
+      installButton.hidden = true;
+    });
+  });
+  window.addEventListener("appinstalled", function () {
+    installButton.hidden = true;
+    showToast("Keryx installed.", false);
+  });
+
   // --- deep links -------------------------------------------------------
   // /?draft=<id>&view=<availability> selects a tab and a draft. A draft that
   // lives in another tab wins over the view parameter.

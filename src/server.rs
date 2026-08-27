@@ -187,6 +187,10 @@ fn build_router(state: SharedState, max_html_bytes: usize) -> Router {
         .route("/api/drafts/{draft_id}/availability", put(set_availability))
         .route("/api/drafts/{draft_id}/disable", post(disable_draft))
         .route("/api/purge", post(purge_deleted))
+        .route("/manifest.webmanifest", get(manifest))
+        .route("/sw.js", get(service_worker))
+        .route("/pwa-icon-192.png", get(icon_192))
+        .route("/pwa-icon-512.png", get(icon_512))
         .route("/d/{draft_id}", get(serve_current))
         .route("/d/{draft_id}/raw", get(serve_current))
         .route("/d/{draft_id}/v/{version}", get(serve_version))
@@ -771,6 +775,35 @@ async fn not_found() -> Response {
     (StatusCode::NOT_FOUND, Html(render_not_found())).into_response()
 }
 
+// --- installable app assets --------------------------------------------------
+// Served on every deployment; the browser's origin decides whether it will
+// register the worker or offer installation.
+
+const MANIFEST: &str = include_str!("../assets/manifest.webmanifest");
+const SERVICE_WORKER: &str = include_str!("../assets/service-worker.js");
+const ICON_192: &[u8] = include_bytes!("../assets/pwa-icon-192.png");
+const ICON_512: &[u8] = include_bytes!("../assets/pwa-icon-512.png");
+
+fn static_asset(content_type: &'static str, body: impl Into<axum::body::Body>) -> Response {
+    ([(header::CONTENT_TYPE, content_type)], body.into()).into_response()
+}
+
+async fn manifest() -> Response {
+    static_asset("application/manifest+json", MANIFEST)
+}
+
+async fn service_worker() -> Response {
+    static_asset("text/javascript; charset=utf-8", SERVICE_WORKER)
+}
+
+async fn icon_192() -> Response {
+    static_asset("image/png", ICON_192)
+}
+
+async fn icon_512() -> Response {
+    static_asset("image/png", ICON_512)
+}
+
 fn internal_error(error: anyhow::Error) -> Response {
     eprintln!("internal error: {error:#}");
     json_error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error.")
@@ -942,6 +975,30 @@ mod tests {
         assert!(!contains_pdf(state.store.root()));
 
         std::fs::remove_dir_all(state.store.root()).ok();
+    }
+
+    #[test]
+    fn pwa_assets_are_installable_and_the_worker_never_intercepts_requests() {
+        let manifest: serde_json::Value = serde_json::from_str(MANIFEST).unwrap();
+        assert_eq!(manifest["name"], "Keryx");
+        assert_eq!(manifest["start_url"], "/");
+        assert_eq!(manifest["scope"], "/");
+        assert_eq!(manifest["display"], "standalone");
+        let sizes: Vec<&str> = manifest["icons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|icon| icon["sizes"].as_str().unwrap())
+            .collect();
+        assert!(sizes.contains(&"192x192"));
+        assert!(sizes.contains(&"512x512"));
+        assert!(ICON_192.starts_with(b"\x89PNG"));
+        assert!(ICON_512.starts_with(b"\x89PNG"));
+
+        assert!(SERVICE_WORKER.contains("addEventListener(\"push\""));
+        assert!(SERVICE_WORKER.contains("addEventListener(\"notificationclick\""));
+        assert!(!SERVICE_WORKER.contains("fetch"));
+        assert!(!SERVICE_WORKER.contains("caches"));
     }
 
     async fn json_body(response: Response) -> serde_json::Value {

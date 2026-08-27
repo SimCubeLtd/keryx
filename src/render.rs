@@ -322,6 +322,10 @@ pub fn render_dashboard(
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Keryx</title>
+  <meta name="theme-color" content="{theme_color}">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="192x192" href="/pwa-icon-192.png">
+  <link rel="apple-touch-icon" href="/pwa-icon-192.png">
   <script>(function(){{try{{var t=localStorage.getItem("keryx-theme")||"system";if(["system","light","dark"].indexOf(t)<0)t="system";document.documentElement.dataset.theme=t}}catch(_){{}}}})();</script>
   <style>{css}</style>
 </head>
@@ -330,6 +334,7 @@ pub fn render_dashboard(
     <div class="brand"><span class="brand-mark">{KERYX_LOGO}</span>Keryx</div>
     <div class="topbar-tools">
       {management_note}
+      <button class="button install" id="install-app" type="button" hidden>Install Keryx</button>
       <a class="health" href="/healthz">Server healthy</a>
       <label class="theme-control"><span>Theme</span><select id="theme-select" aria-label="Theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
     </div>
@@ -396,6 +401,7 @@ pub fn render_dashboard(
 </html>"#,
         css = DASHBOARD_CSS,
         js = DASHBOARD_JS,
+        theme_color = "#2563eb",
         active_count = active_count,
         snoozed_count = snoozed_count,
         disabled_count = disabled_count,
@@ -454,6 +460,8 @@ mod tests {
         assert!(html.contains("data-availability-action=\"snooze\""));
         assert!(html.contains("data-availability-action=\"disable\""));
         assert!(html.contains("id=\"snooze-dialog\""));
+        assert!(html.contains("<link rel=\"manifest\" href=\"/manifest.webmanifest\">"));
+        assert!(html.contains("id=\"install-app\" type=\"button\" hidden"));
         assert!(html.contains("<option value=\"system\">System</option>"));
         assert!(html.contains("<svg"));
         assert!(html.contains("Keryx Dispatch"));
