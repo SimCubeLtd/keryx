@@ -101,7 +101,8 @@ a { color: inherit; }
   backdrop-filter: blur(12px);
 }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 820; letter-spacing: -.025em; }
-.brand-mark { display: grid; place-items: center; width: 25px; height: 25px; border-radius: 6px; color: #fff; font: 15px Georgia, serif; background: #2563eb; }
+.brand-mark { display: block; width: 25px; height: 25px; flex: 0 0 auto; }
+.brand-mark svg { display: block; width: 100%; height: 100%; }
 .topbar-tools { display: flex; align-items: center; gap: 14px; margin-left: auto; }
 .health { display: inline-flex; align-items: center; gap: 7px; color: var(--text-muted); font-size: 11px; text-decoration: none; }
 .health::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #22c55e; }
@@ -257,7 +258,7 @@ dialog::backdrop { background: rgba(15, 23, 42, .52); }
 @media (min-width: 1800px) {
   .topbar { min-height: 68px; padding: 0 clamp(24px, 2.5vw, 44px); }
   .brand { gap: 11px; font-size: 15px; }
-  .brand-mark { width: 30px; height: 30px; border-radius: 7px; font-size: 17px; }
+  .brand-mark { width: 30px; height: 30px; }
   .topbar-tools { gap: 16px; }
   .health { font-size: 13px; }
   .management-mode, .protected-note, .theme-control { font-size: 12px; }

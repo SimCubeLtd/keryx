@@ -1,0 +1,16 @@
+{
+  "canvas": { "width_mm": 24, "height_mm": 24 },
+  "palette": ["#2563eb", "#ffffff", "#93c5fd"],
+  "metadata": {
+    "title": "Keryx Dispatch",
+    "description": "A published document with a folded corner and an outbound signal."
+  },
+  "elements": [
+    { "type": "rounded_rectangle", "id": "field", "x_mm": 1, "y_mm": 1, "width_mm": 22, "height_mm": 22, "radius_mm": 5, "fill": "0" },
+    { "type": "rounded_rectangle", "id": "page", "x_mm": 5, "y_mm": 4, "width_mm": 11.5, "height_mm": 16, "radius_mm": 1.6, "fill": "1" },
+    { "type": "polygon", "id": "fold-cut", "points": [[12.5, 4], [16.5, 4], [16.5, 8]], "fill": "0" },
+    { "type": "rounded_rectangle", "id": "line-one", "x_mm": 7.2, "y_mm": 11, "width_mm": 7.1, "height_mm": 1.5, "radius_mm": 0.75, "fill": "0" },
+    { "type": "rounded_rectangle", "id": "line-two", "x_mm": 7.2, "y_mm": 14.5, "width_mm": 5.1, "height_mm": 1.5, "radius_mm": 0.75, "fill": "2" },
+    { "type": "polygon", "id": "outbound", "points": [[15.5, 14.2], [21, 17], [15.5, 19.8]], "fill": "2" }
+  ]
+}
