@@ -115,6 +115,19 @@ a { color: inherit; }
 .theme-control { display: inline-flex; align-items: center; gap: 7px; color: var(--text-muted); font-size: 10px; }
 .theme-control select { padding: 6px 27px 6px 8px; border: 1px solid var(--line); border-radius: 6px; color: var(--text-soft); background: var(--surface-raised); }
 .topbar .button { padding: 6px 10px; font-size: 10px; }
+.notify-menu { position: relative; }
+.notify-menu summary { display: inline-flex; align-items: center; gap: 7px; padding: 6px 10px; border: 1px solid var(--line-strong); border-radius: 7px; color: var(--text-soft); font-size: 10px; font-weight: 720; list-style: none; background: var(--surface-raised); }
+.notify-menu summary::-webkit-details-marker { display: none; }
+.notify-menu summary::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--text-quiet); }
+.notify-menu summary.on { border-color: color-mix(in srgb, var(--blue) 38%, var(--line)); color: var(--blue-strong); background: var(--blue-muted); }
+.notify-menu summary.on::before { background: #22c55e; }
+.notify-menu[open] summary, .notify-menu summary:hover { border-color: var(--blue); color: var(--blue-strong); }
+.notify-panel { top: 36px; width: 272px; }
+.notify-state { padding: 8px 9px 6px; color: var(--text-muted); font-size: 10px; line-height: 1.5; }
+.notify-option { display: flex; align-items: center; gap: 8px; padding: 6px 9px; border-radius: 5px; color: var(--text-soft); font-size: 10px; font-weight: 650; cursor: pointer; }
+.notify-option:hover { background: var(--surface-muted); }
+.notify-option input { margin: 0; accent-color: var(--blue); }
+.notify-actions { display: flex; gap: 6px; padding: 8px 9px 4px; }
 
 .button, .icon-button {
   display: inline-flex;

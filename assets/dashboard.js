@@ -365,7 +365,7 @@
   });
 
   document.addEventListener("click", function (event) {
-    document.querySelectorAll(".row-menu[open]").forEach(function (menu) {
+    document.querySelectorAll(".row-menu[open], .notify-menu[open]").forEach(function (menu) {
       if (!menu.contains(event.target)) menu.removeAttribute("open");
     });
   });
@@ -611,6 +611,117 @@
     installButton.hidden = true;
     showToast("Keryx installed.", false);
   });
+
+  // --- push notifications -----------------------------------------------
+  // The subscription lives in the browser; the server stores its keys and
+  // event preferences by endpoint. Denied or unsupported notifications never
+  // affect snoozing: the in-page wake timer above still runs.
+
+  var notifyMenu = document.getElementById("notify-menu");
+  var pushSupported = Boolean(notifyMenu) && window.isSecureContext && "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+  if (pushSupported) {
+    var notifySummary = document.getElementById("notify-summary");
+    var notifyState = document.getElementById("notify-state");
+    var notifyEnable = document.getElementById("notify-enable");
+    var notifyDisable = document.getElementById("notify-disable");
+    var eventBoxes = Array.from(document.querySelectorAll("[data-event]"));
+    notifyMenu.hidden = false;
+
+    var base64UrlToBytes = function (value) {
+      var padded = (value + "=".repeat((4 - (value.length % 4)) % 4)).replace(/-/g, "+").replace(/_/g, "/");
+      var raw = atob(padded);
+      var bytes = new Uint8Array(raw.length);
+      for (var index = 0; index < raw.length; index += 1) bytes[index] = raw.charCodeAt(index);
+      return bytes;
+    };
+    var selectedEvents = function () {
+      return eventBoxes.filter(function (box) { return box.checked; }).map(function (box) { return box.dataset.event; });
+    };
+    var pushRequest = function (method, body) {
+      return fetch("/api/push/subscriptions", {
+        method: method,
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      }).then(function (response) {
+        return response.json().catch(function () { return {}; }).then(function (payload) {
+          if (!response.ok) {
+            throw new Error(response.status === 401 ? "API key required. Use the CLI for this action." : (payload.error || "Notification settings could not be saved."));
+          }
+          return payload;
+        });
+      });
+    };
+    var renderNotifyState = function (subscription) {
+      var on = Boolean(subscription);
+      notifySummary.textContent = on ? "Notifications on" : "Notifications off";
+      notifySummary.classList.toggle("on", on);
+      notifyEnable.hidden = on;
+      notifyDisable.hidden = !on;
+      eventBoxes.forEach(function (box) {
+        if (subscription) box.checked = subscription.events.includes(box.dataset.event);
+        box.disabled = !on;
+      });
+      if (on) notifyState.textContent = "This device gets draft activity even while Keryx is closed.";
+      else if (Notification.permission === "denied") notifyState.textContent = "Notifications are blocked for this site in the browser. Snoozing still works, and wakes show here while the dashboard is open.";
+      else notifyState.textContent = "Get a notification when a plan is published, revised, wakes, or changes availability, even with Keryx closed.";
+    };
+    var currentSubscription = function () {
+      return navigator.serviceWorker.ready.then(function (registration) { return registration.pushManager.getSubscription(); });
+    };
+    var saveSubscription = function (subscription, events) {
+      var json = subscription.toJSON();
+      return pushRequest("PUT", { endpoint: json.endpoint, keys: json.keys, events: events }).then(function (body) {
+        renderNotifyState(body.subscription);
+        return body.subscription;
+      });
+    };
+
+    renderNotifyState(null);
+    currentSubscription()
+      .then(function (subscription) { if (subscription) return saveSubscription(subscription, null); })
+      .catch(function () { renderNotifyState(null); });
+
+    notifyEnable.addEventListener("click", function () {
+      notifyEnable.disabled = true;
+      Notification.requestPermission()
+        .then(function (permission) {
+          if (permission !== "granted") {
+            renderNotifyState(null);
+            return null;
+          }
+          return fetch("/api/push/vapid", { headers: { Accept: "application/json" } })
+            .then(function (response) { return response.json(); })
+            .then(function (body) {
+              return navigator.serviceWorker.ready.then(function (registration) {
+                return registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: base64UrlToBytes(body.publicKey) });
+              });
+            })
+            .then(function (subscription) { return saveSubscription(subscription, selectedEvents()); })
+            .then(function () { showToast("Notifications enabled on this device.", false); });
+        })
+        .catch(function (error) { showToast(error.message || "Notifications could not be enabled.", true); })
+        .finally(function () { notifyEnable.disabled = false; });
+    });
+    notifyDisable.addEventListener("click", function () {
+      currentSubscription()
+        .then(function (subscription) {
+          if (!subscription) return null;
+          return pushRequest("DELETE", { endpoint: subscription.endpoint }).then(function () { return subscription.unsubscribe(); });
+        })
+        .then(function () {
+          renderNotifyState(null);
+          showToast("Notifications turned off on this device.", false);
+        })
+        .catch(function (error) { showToast(error.message, true); });
+    });
+    eventBoxes.forEach(function (box) {
+      box.addEventListener("change", function () {
+        currentSubscription()
+          .then(function (subscription) { if (subscription) return saveSubscription(subscription, selectedEvents()); })
+          .catch(function (error) { showToast(error.message, true); });
+      });
+    });
+  }
 
   // --- deep links -------------------------------------------------------
   // /?draft=<id>&view=<availability> selects a tab and a draft. A draft that

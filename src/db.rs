@@ -10,7 +10,10 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::ids::{new_draft_id, new_internal_id};
 use crate::storage::BlobStore;
-use crate::types::{AvailabilityUpdate, DraftSummary, UploadMetadata, VersionInfo};
+use crate::types::{
+    AvailabilityUpdate, DraftSummary, NotificationEvent, NotificationKind, PushSubscriptionInput,
+    PushSubscriptionSummary, UploadMetadata, VersionInfo,
+};
 
 pub fn now() -> String {
     format_timestamp(Utc::now())
@@ -80,6 +83,36 @@ fn init(conn: &Connection) -> Result<()> {
 
         CREATE INDEX IF NOT EXISTS draft_versions_draft_id_idx ON draft_versions(draft_id);
         CREATE INDEX IF NOT EXISTS drafts_updated_at_idx ON drafts(updated_at);
+
+        CREATE TABLE IF NOT EXISTS push_subscriptions (
+            id TEXT PRIMARY KEY,
+            endpoint TEXT NOT NULL UNIQUE,
+            p256dh TEXT NOT NULL,
+            auth TEXT NOT NULL,
+            events TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS notification_events (
+            key TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            draft_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            target TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS notification_deliveries (
+            event_key TEXT NOT NULL REFERENCES notification_events(key) ON DELETE CASCADE,
+            subscription_id TEXT NOT NULL REFERENCES push_subscriptions(id) ON DELETE CASCADE,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            next_attempt_at TEXT NOT NULL,
+            PRIMARY KEY (event_key, subscription_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS notification_deliveries_due_idx ON notification_deliveries(next_attempt_at);
         "#,
     )?;
 
@@ -329,6 +362,13 @@ pub fn record_upload(
             draft_id
         ],
     )?;
+
+    let event = if created {
+        NotificationEvent::published(&draft_id, &title, &version_id, &timestamp)
+    } else {
+        NotificationEvent::revised(&draft_id, &title, &version_id, version_number, &timestamp)
+    };
+    record_event(&tx, &event)?;
 
     tx.commit()?;
 
@@ -639,17 +679,16 @@ pub fn set_availability(
     let tx = conn.transaction()?;
     let timestamp = now();
 
-    let exists = tx
+    let previous: Option<(bool, String)> = tx
         .query_row(
-            "SELECT 1 FROM drafts WHERE id = ?1 AND deleted_at IS NULL",
+            "SELECT disabled_at IS NOT NULL, title FROM drafts WHERE id = ?1 AND deleted_at IS NULL",
             params![draft_id],
-            |_| Ok(()),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
-        .optional()?
-        .is_some();
-    if !exists {
+        .optional()?;
+    let Some((was_disabled, title)) = previous else {
         return Err(AvailabilityError::DraftNotFound);
-    }
+    };
 
     match update {
         AvailabilityUpdate::Active => {
@@ -686,9 +725,278 @@ pub fn set_availability(
         }
     }
 
+    // Only a change of serving state is activity: snoozing and unsnoozing
+    // are the owner's own attention management.
+    let event = match update {
+        AvailabilityUpdate::Disabled { .. } if !was_disabled => {
+            Some(NotificationEvent::disabled(draft_id, &title, &timestamp))
+        }
+        AvailabilityUpdate::Active if was_disabled => {
+            Some(NotificationEvent::enabled(draft_id, &title, &timestamp))
+        }
+        _ => None,
+    };
+    if let Some(event) = event {
+        record_event(&tx, &event)?;
+    }
+
     let summary = get_draft_summary(&tx, draft_id)?.ok_or(AvailabilityError::DraftNotFound)?;
     tx.commit()?;
     Ok(summary)
+}
+
+// --- notifications -----------------------------------------------------------
+// Events and their per-subscription deliveries form the outbox that the
+// dispatcher in notifications.rs drains.
+
+/// Store an event and queue one delivery per subscription that opted in to
+/// its kind, inside the caller's transaction. Idempotent by key: a repeated
+/// key (for example a wake recomputed after a restart) changes nothing and
+/// returns false.
+pub fn record_event(conn: &Connection, event: &NotificationEvent) -> rusqlite::Result<bool> {
+    let inserted = conn.execute(
+        r#"
+        INSERT OR IGNORE INTO notification_events (key, kind, draft_id, title, body, target, created_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        "#,
+        params![
+            event.key,
+            event.kind.as_str(),
+            event.draft_id,
+            event.title,
+            event.body,
+            event.target,
+            event.created_at
+        ],
+    )?;
+    if inserted == 0 {
+        return Ok(false);
+    }
+    conn.execute(
+        r#"
+        INSERT INTO notification_deliveries (event_key, subscription_id, attempts, next_attempt_at)
+        SELECT ?1, id, 0, ?2 FROM push_subscriptions WHERE events LIKE ?3
+        "#,
+        params![
+            event.key,
+            event.created_at,
+            format!("%\"{}\"%", event.kind.as_str())
+        ],
+    )?;
+    Ok(true)
+}
+
+fn read_subscription(row: &rusqlite::Row<'_>) -> rusqlite::Result<PushSubscriptionSummary> {
+    let events: String = row.get(2)?;
+    Ok(PushSubscriptionSummary {
+        id: row.get(0)?,
+        endpoint: row.get(1)?,
+        events: serde_json::from_str(&events).unwrap_or_default(),
+        updated_at: row.get(3)?,
+    })
+}
+
+pub fn get_push_subscription(
+    conn: &Connection,
+    endpoint: &str,
+) -> Result<Option<PushSubscriptionSummary>> {
+    Ok(conn
+        .query_row(
+            "SELECT id, endpoint, events, updated_at FROM push_subscriptions WHERE endpoint = ?1",
+            params![endpoint],
+            read_subscription,
+        )
+        .optional()?)
+}
+
+/// Insert or refresh a browser subscription by endpoint. Keys are always
+/// replaced; preferences change only when the caller sends them.
+pub fn upsert_push_subscription(
+    conn: &Connection,
+    input: &PushSubscriptionInput,
+) -> Result<PushSubscriptionSummary> {
+    let timestamp = now();
+    let events = input
+        .events
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()?;
+    let everything = serde_json::to_string(&NotificationKind::ALL)?;
+    conn.execute(
+        r#"
+        INSERT INTO push_subscriptions (id, endpoint, p256dh, auth, events, created_at, updated_at)
+        VALUES (?1, ?2, ?3, ?4, COALESCE(?5, ?6), ?7, ?7)
+        ON CONFLICT(endpoint) DO UPDATE SET
+            p256dh = excluded.p256dh,
+            auth = excluded.auth,
+            events = COALESCE(?5, push_subscriptions.events),
+            updated_at = excluded.updated_at
+        "#,
+        params![
+            new_internal_id(),
+            input.endpoint,
+            input.keys.p256dh,
+            input.keys.auth,
+            events,
+            everything,
+            timestamp
+        ],
+    )?;
+    get_push_subscription(conn, &input.endpoint)?.context("subscription was not stored")
+}
+
+pub fn remove_push_subscription(conn: &Connection, endpoint: &str) -> Result<bool> {
+    let removed = conn.execute(
+        "DELETE FROM push_subscriptions WHERE endpoint = ?1",
+        params![endpoint],
+    )?;
+    Ok(removed > 0)
+}
+
+pub fn remove_push_subscription_by_id(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute("DELETE FROM push_subscriptions WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+/// One event addressed to one subscription, with the keys needed to send it.
+#[derive(Debug, Clone)]
+pub struct PendingDelivery {
+    pub event: NotificationEvent,
+    pub subscription_id: String,
+    pub endpoint: String,
+    pub p256dh: String,
+    pub auth: String,
+    pub attempts: i64,
+}
+
+fn parse_kind(index: usize, value: String) -> rusqlite::Result<NotificationKind> {
+    NotificationKind::parse(&value).ok_or_else(|| {
+        rusqlite::Error::FromSqlConversionFailure(
+            index,
+            rusqlite::types::Type::Text,
+            format!("unknown notification kind {value:?}").into(),
+        )
+    })
+}
+
+/// Deliveries due at `now`, earliest first.
+pub fn due_deliveries(conn: &Connection, now: &str, limit: usize) -> Result<Vec<PendingDelivery>> {
+    let mut statement = conn.prepare(
+        r#"
+        SELECT e.key, e.kind, e.draft_id, e.title, e.body, e.target, e.created_at,
+               s.id, s.endpoint, s.p256dh, s.auth, d.attempts
+        FROM notification_deliveries d
+        JOIN notification_events e ON e.key = d.event_key
+        JOIN push_subscriptions s ON s.id = d.subscription_id
+        WHERE d.next_attempt_at <= ?1
+        ORDER BY d.next_attempt_at
+        LIMIT ?2
+        "#,
+    )?;
+    let rows = statement.query_map(params![now, limit as i64], |row| {
+        Ok(PendingDelivery {
+            event: NotificationEvent {
+                key: row.get(0)?,
+                kind: parse_kind(1, row.get(1)?)?,
+                draft_id: row.get(2)?,
+                title: row.get(3)?,
+                body: row.get(4)?,
+                target: row.get(5)?,
+                created_at: row.get(6)?,
+            },
+            subscription_id: row.get(7)?,
+            endpoint: row.get(8)?,
+            p256dh: row.get(9)?,
+            auth: row.get(10)?,
+            attempts: row.get(11)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+/// The delivery is finished, whether it succeeded or was given up on.
+pub fn delivery_done(conn: &Connection, event_key: &str, subscription_id: &str) -> Result<()> {
+    conn.execute(
+        "DELETE FROM notification_deliveries WHERE event_key = ?1 AND subscription_id = ?2",
+        params![event_key, subscription_id],
+    )?;
+    Ok(())
+}
+
+pub fn delivery_retry(
+    conn: &Connection,
+    event_key: &str,
+    subscription_id: &str,
+    attempts: i64,
+    next_attempt_at: &str,
+) -> Result<()> {
+    conn.execute(
+        r#"
+        UPDATE notification_deliveries SET attempts = ?3, next_attempt_at = ?4
+        WHERE event_key = ?1 AND subscription_id = ?2
+        "#,
+        params![event_key, subscription_id, attempts, next_attempt_at],
+    )?;
+    Ok(())
+}
+
+pub fn next_delivery_at(conn: &Connection) -> Result<Option<String>> {
+    Ok(conn.query_row(
+        "SELECT MIN(next_attempt_at) FROM notification_deliveries",
+        [],
+        |row| row.get(0),
+    )?)
+}
+
+/// Turn every expired snooze that has not woken yet into a Plan woke event.
+/// The wake key carries the snooze timestamp, so this is safe to run on
+/// every pass and after a restart; nothing on the draft row changes.
+pub fn record_due_wakes(conn: &mut Connection, now: &str) -> Result<Vec<NotificationEvent>> {
+    let tx = conn.transaction()?;
+    let due: Vec<(String, String, String)> = tx
+        .prepare(
+            r#"
+            SELECT id, title, snoozed_until FROM drafts
+            WHERE deleted_at IS NULL AND disabled_at IS NULL
+              AND snoozed_until IS NOT NULL AND snoozed_until <= ?1
+              AND NOT EXISTS (
+                  SELECT 1 FROM notification_events e
+                  WHERE e.key = 'woke:' || drafts.id || ':' || drafts.snoozed_until
+              )
+            "#,
+        )?
+        .query_map(params![now], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?
+        .collect::<Result<_, _>>()?;
+    let mut woke = Vec::with_capacity(due.len());
+    for (draft_id, title, snoozed_until) in due {
+        let event = NotificationEvent::woke(&draft_id, &title, &snoozed_until, now);
+        if record_event(&tx, &event)? {
+            woke.push(event);
+        }
+    }
+    tx.commit()?;
+    Ok(woke)
+}
+
+/// The nearest future wake time across live, snoozed drafts.
+pub fn next_wake_at(conn: &Connection, now: &str) -> Result<Option<String>> {
+    Ok(conn.query_row(
+        r#"
+        SELECT MIN(snoozed_until) FROM drafts
+        WHERE deleted_at IS NULL AND disabled_at IS NULL AND snoozed_until > ?1
+        "#,
+        params![now],
+        |row| row.get(0),
+    )?)
+}
+
+#[cfg(test)]
+pub fn test_connection() -> Connection {
+    let conn = Connection::open_in_memory().unwrap();
+    init(&conn).unwrap();
+    conn
 }
 
 #[cfg(test)]
@@ -696,9 +1004,18 @@ mod tests {
     use super::*;
 
     fn test_conn() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        init(&conn).unwrap();
-        conn
+        test_connection()
+    }
+
+    fn event_kinds(conn: &Connection, draft_id: &str) -> Vec<(String, String)> {
+        conn.prepare(
+            "SELECT kind, target FROM notification_events WHERE draft_id = ?1 ORDER BY created_at, kind",
+        )
+        .unwrap()
+        .query_map(params![draft_id], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
     }
 
     fn upload<'a>(
@@ -1086,6 +1403,187 @@ mod tests {
         assert!(!active.disabled);
         assert_eq!(active.snoozed_until, None);
         assert!(active.updated_at >= resnoozed.updated_at);
+
+        std::fs::remove_dir_all(store.root()).ok();
+    }
+
+    fn subscription(
+        endpoint: &str,
+        events: Option<Vec<NotificationKind>>,
+    ) -> PushSubscriptionInput {
+        PushSubscriptionInput {
+            endpoint: endpoint.into(),
+            keys: crate::types::PushKeys {
+                p256dh: "BPUBLIC".into(),
+                auth: "AUTH".into(),
+            },
+            events,
+        }
+    }
+
+    #[test]
+    fn uploads_and_serving_changes_record_events_for_opted_in_subscriptions() {
+        let mut conn = test_conn();
+        let store = crate::storage::test_store();
+        let meta = UploadMetadata::default();
+        let everything =
+            upsert_push_subscription(&conn, &subscription("https://push.test/a", None)).unwrap();
+        assert_eq!(everything.events, NotificationKind::ALL.to_vec());
+        let revisions_only = upsert_push_subscription(
+            &conn,
+            &subscription("https://push.test/b", Some(vec![NotificationKind::Revised])),
+        )
+        .unwrap();
+
+        let first = record_upload(
+            &mut conn,
+            &store,
+            upload("<title>Test</title>v1", None, &meta),
+        )
+        .unwrap();
+        let draft_id = first.draft_id.clone();
+        record_upload(
+            &mut conn,
+            &store,
+            upload("<title>Test</title>v2", Some(draft_id.clone()), &meta),
+        )
+        .unwrap();
+        set_availability(
+            &mut conn,
+            &draft_id,
+            &AvailabilityUpdate::Snoozed {
+                until: "2099-01-01T00:00:00Z".into(),
+            },
+        )
+        .unwrap();
+        set_availability(&mut conn, &draft_id, &AvailabilityUpdate::Active).unwrap();
+        set_availability(
+            &mut conn,
+            &draft_id,
+            &AvailabilityUpdate::Disabled { reason: None },
+        )
+        .unwrap();
+        set_availability(
+            &mut conn,
+            &draft_id,
+            &AvailabilityUpdate::Disabled {
+                reason: Some("again".into()),
+            },
+        )
+        .unwrap();
+        set_availability(&mut conn, &draft_id, &AvailabilityUpdate::Active).unwrap();
+
+        let mut kinds = event_kinds(&conn, &draft_id);
+        kinds.sort();
+        assert_eq!(
+            kinds,
+            vec![
+                (
+                    "disabled".to_string(),
+                    format!("/?draft={draft_id}&view=disabled")
+                ),
+                (
+                    "enabled".to_string(),
+                    format!("/?draft={draft_id}&view=active")
+                ),
+                ("published".to_string(), format!("/d/{draft_id}")),
+                ("revised".to_string(), format!("/d/{draft_id}/v/2")),
+            ]
+        );
+
+        let due = due_deliveries(&conn, "2099-01-01T00:00:00.000Z", 50).unwrap();
+        let mut addressed: Vec<(String, String)> = due
+            .iter()
+            .map(|delivery| {
+                (
+                    delivery.subscription_id.clone(),
+                    delivery.event.kind.as_str().to_string(),
+                )
+            })
+            .collect();
+        addressed.sort();
+        let mut expected = vec![
+            (everything.id.clone(), "disabled".to_string()),
+            (everything.id.clone(), "enabled".to_string()),
+            (everything.id.clone(), "published".to_string()),
+            (everything.id.clone(), "revised".to_string()),
+            (revisions_only.id.clone(), "revised".to_string()),
+        ];
+        expected.sort();
+        assert_eq!(addressed, expected);
+
+        // Preferences change only when sent; keys always refresh.
+        let updated =
+            upsert_push_subscription(&conn, &subscription("https://push.test/b", None)).unwrap();
+        assert_eq!(updated.id, revisions_only.id);
+        assert_eq!(updated.events, vec![NotificationKind::Revised]);
+        assert!(remove_push_subscription(&conn, "https://push.test/b").unwrap());
+        assert!(!remove_push_subscription(&conn, "https://push.test/b").unwrap());
+        assert_eq!(
+            due_deliveries(&conn, "2099-01-01T00:00:00.000Z", 50)
+                .unwrap()
+                .len(),
+            4
+        );
+
+        std::fs::remove_dir_all(store.root()).ok();
+    }
+
+    #[test]
+    fn a_due_snooze_wakes_exactly_once_without_touching_the_draft() {
+        let mut conn = test_conn();
+        let store = crate::storage::test_store();
+        let draft_id = record_upload(
+            &mut conn,
+            &store,
+            upload("<title>Test</title>v1", None, &UploadMetadata::default()),
+        )
+        .unwrap()
+        .draft_id;
+        upsert_push_subscription(&conn, &subscription("https://push.test/a", None)).unwrap();
+
+        // Snoozes are validated as future on write, so age one directly.
+        conn.execute(
+            "UPDATE drafts SET snoozed_until = '2026-01-01T09:00:00.000Z' WHERE id = ?1",
+            params![draft_id],
+        )
+        .unwrap();
+        assert_eq!(
+            next_wake_at(&conn, "2026-01-01T08:00:00.000Z")
+                .unwrap()
+                .as_deref(),
+            Some("2026-01-01T09:00:00.000Z")
+        );
+        assert!(record_due_wakes(&mut conn, "2026-01-01T08:59:59.999Z")
+            .unwrap()
+            .is_empty());
+
+        let woke = record_due_wakes(&mut conn, "2026-01-01T09:00:00.000Z").unwrap();
+        assert_eq!(woke.len(), 1);
+        assert_eq!(woke[0].kind, NotificationKind::Woke);
+        assert_eq!(woke[0].target, format!("/d/{draft_id}"));
+        // A later pass, or a restart, finds nothing new to send.
+        assert!(record_due_wakes(&mut conn, "2026-01-02T00:00:00.000Z")
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            next_wake_at(&conn, "2026-01-02T00:00:00.000Z").unwrap(),
+            None
+        );
+        let row = get_draft_summary(&conn, &draft_id).unwrap().unwrap();
+        assert_eq!(
+            row.snoozed_until.as_deref(),
+            Some("2026-01-01T09:00:00.000Z")
+        );
+        assert_eq!(row.availability(), crate::types::Availability::Active);
+        assert_eq!(
+            due_deliveries(&conn, "2099-01-01T00:00:00.000Z", 50)
+                .unwrap()
+                .iter()
+                .filter(|d| d.event.kind == NotificationKind::Woke)
+                .count(),
+            1
+        );
 
         std::fs::remove_dir_all(store.root()).ok();
     }

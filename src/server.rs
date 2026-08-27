@@ -17,11 +17,15 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::db::{self, AvailabilityError, NewUpload, UploadError};
+use crate::notifications::{self, PushHub, VapidIdentity};
 use crate::pdf::{render_version_pdf, PdfIdentity};
 use crate::policy::{validate_html, PolicyOptions, DEFAULT_MAX_HTML_BYTES};
 use crate::render::{render_dashboard, render_not_found};
 use crate::storage::BlobStore;
-use crate::types::{AvailabilityUpdate, DraftDetail, DraftSummary, UploadMetadata, UploadResponse};
+use crate::types::{
+    AvailabilityUpdate, DraftDetail, DraftSummary, PushSubscriptionInput, UploadMetadata,
+    UploadResponse,
+};
 
 #[derive(clap::Args, Debug)]
 pub struct ServeArgs {
@@ -69,6 +73,12 @@ pub struct ServeArgs {
     /// not enough on its own: without this the CSP still blocks execution
     #[arg(long, env = "KERYX_ALLOW_INLINE_SCRIPTS")]
     pub allow_inline_scripts: bool,
+
+    /// Contact push services may use about this server's Web Push traffic,
+    /// e.g. mailto:ops@example.com (default: the HTTPS public base URL,
+    /// otherwise mailto:keryx@localhost)
+    #[arg(long, env = "KERYX_PUSH_CONTACT")]
+    pub push_contact: Option<String>,
 }
 
 impl ServeArgs {
@@ -83,12 +93,13 @@ impl ServeArgs {
 }
 
 struct AppState {
-    db: Mutex<Connection>,
+    db: Arc<Mutex<Connection>>,
     store: BlobStore,
     public_base_url: Option<String>,
     api_key_hash: Option<String>,
     policy: PolicyOptions,
     csp: HeaderValue,
+    push: Arc<PushHub>,
 }
 
 type SharedState = Arc<AppState>;
@@ -107,19 +118,28 @@ pub fn run(args: ServeArgs) -> Result<()> {
     let db_path = args.db.clone().unwrap_or_else(default_db_path);
     let data_dir = args.data_dir.clone().unwrap_or_else(default_state_dir);
     let conn = db::open(&db_path)?;
+    let public_base_url = args
+        .public_base_url
+        .as_deref()
+        .map(|u| u.trim_end_matches('/').to_string());
+    let vapid = VapidIdentity::load_or_create(&data_dir)?;
+    let push_contact = args
+        .push_contact
+        .clone()
+        .unwrap_or_else(|| notifications::default_contact(public_base_url.as_deref()));
 
     let state: SharedState = Arc::new(AppState {
-        db: Mutex::new(conn),
+        db: Arc::new(Mutex::new(conn)),
         store: BlobStore::new(data_dir.clone()),
-        public_base_url: args
-            .public_base_url
-            .as_deref()
-            .map(|u| u.trim_end_matches('/').to_string()),
+        public_base_url,
         api_key_hash: args.api_key.as_deref().map(crate::sha256_hex),
         policy: args.policy(),
         csp: draft_csp(&args.policy()),
+        push: Arc::new(PushHub::new(vapid, push_contact)),
     });
     let blob_root = state.store.root().join("drafts");
+    let dispatcher_db = state.db.clone();
+    let dispatcher_hub = state.push.clone();
 
     let app = build_router(state, args.max_html_bytes);
 
@@ -162,6 +182,12 @@ pub fn run(args: ServeArgs) -> Result<()> {
                 "open (set KERYX_API_KEY to require a key)"
             }
         );
+        println!(
+            "push: VAPID identity {} · contact {}",
+            data_dir.join("vapid.json").display(),
+            dispatcher_hub.contact()
+        );
+        tokio::spawn(notifications::run_dispatcher(dispatcher_db, dispatcher_hub));
         axum::serve(
             listener,
             app.into_make_service_with_connect_info::<SocketAddr>(),
@@ -187,6 +213,11 @@ fn build_router(state: SharedState, max_html_bytes: usize) -> Router {
         .route("/api/drafts/{draft_id}/availability", put(set_availability))
         .route("/api/drafts/{draft_id}/disable", post(disable_draft))
         .route("/api/purge", post(purge_deleted))
+        .route("/api/push/vapid", get(push_vapid))
+        .route(
+            "/api/push/subscriptions",
+            put(push_subscribe).delete(push_unsubscribe),
+        )
         .route("/manifest.webmanifest", get(manifest))
         .route("/sw.js", get(service_worker))
         .route("/pwa-icon-192.png", get(icon_192))
@@ -415,6 +446,7 @@ async fn upload(
 
     match outcome {
         Ok(outcome) => {
+            state.push.wake();
             let base = base_url(&state, &headers);
             let response = UploadResponse {
                 public_url: format!("{base}/d/{}", outcome.draft_id),
@@ -710,6 +742,7 @@ fn apply_availability(
     };
     match result {
         Ok(mut draft) => {
+            state.push.wake();
             fill_urls(&mut draft, &base_url(state, headers));
             Json(json!({ "ok": true, "draft": draft })).into_response()
         }
@@ -773,6 +806,79 @@ fn serve_draft(state: &AppState, draft_id: &str, version: Option<i64>) -> Respon
 
 async fn not_found() -> Response {
     (StatusCode::NOT_FOUND, Html(render_not_found())).into_response()
+}
+
+// --- push subscriptions ------------------------------------------------------
+// Same authentication rule as every other mutation: with an API key set the
+// dashboard is read-only, so a protected deployment has no browser path to
+// subscribe until Keryx has browser authentication.
+
+async fn push_vapid(State(state): State<SharedState>, headers: HeaderMap) -> Response {
+    if !authorized(&state, &headers) {
+        return unauthorized();
+    }
+    Json(json!({ "ok": true, "publicKey": state.push.public_key() })).into_response()
+}
+
+async fn push_subscribe(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    body: Result<Json<PushSubscriptionInput>, JsonRejection>,
+) -> Response {
+    if !authorized(&state, &headers) {
+        return unauthorized();
+    }
+    let input = match body {
+        Ok(Json(input)) => input,
+        Err(rejection) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                &format!("Invalid subscription: {}", rejection.body_text()),
+            )
+        }
+    };
+    if !input.endpoint.starts_with("https://") {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "Subscription endpoint must be an https URL.",
+        );
+    }
+    let result = {
+        let conn = state.db.lock().unwrap();
+        db::upsert_push_subscription(&conn, &input)
+    };
+    match result {
+        Ok(subscription) => {
+            Json(json!({ "ok": true, "subscription": subscription })).into_response()
+        }
+        Err(error) => internal_error(error),
+    }
+}
+
+#[derive(Deserialize)]
+struct UnsubscribeBody {
+    endpoint: String,
+}
+
+async fn push_unsubscribe(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    body: Result<Json<UnsubscribeBody>, JsonRejection>,
+) -> Response {
+    if !authorized(&state, &headers) {
+        return unauthorized();
+    }
+    let Ok(Json(body)) = body else {
+        return json_error(StatusCode::BAD_REQUEST, "Endpoint is required.");
+    };
+    let result = {
+        let conn = state.db.lock().unwrap();
+        db::remove_push_subscription(&conn, &body.endpoint)
+    };
+    match result {
+        Ok(removed) => Json(json!({ "ok": true, "removed": removed })).into_response(),
+        Err(error) => internal_error(error),
+    }
 }
 
 // --- installable app assets --------------------------------------------------
@@ -841,6 +947,24 @@ mod tests {
         }
     }
 
+    /// A protected server (API key "secret") on a throwaway store.
+    fn test_state() -> SharedState {
+        let store = crate::storage::test_store();
+        let conn = db::open(&store.root().join("test.db")).unwrap();
+        Arc::new(AppState {
+            db: Arc::new(Mutex::new(conn)),
+            store,
+            public_base_url: Some("https://keryx.test".into()),
+            api_key_hash: Some(crate::sha256_hex("secret")),
+            policy: PolicyOptions::default(),
+            csp: draft_csp(&PolicyOptions::default()),
+            push: Arc::new(PushHub::new(
+                VapidIdentity::generate(),
+                "mailto:test@keryx.test".into(),
+            )),
+        })
+    }
+
     #[test]
     fn csp_tracks_the_upload_policy() {
         let strict = draft_csp(&PolicyOptions::default());
@@ -878,16 +1002,7 @@ mod tests {
 
     #[tokio::test]
     async fn pdf_endpoint_is_authenticated_versioned_and_ephemeral() {
-        let store = crate::storage::test_store();
-        let conn = db::open(&store.root().join("test.db")).unwrap();
-        let state = Arc::new(AppState {
-            db: Mutex::new(conn),
-            store,
-            public_base_url: Some("https://keryx.test".into()),
-            api_key_hash: Some(crate::sha256_hex("secret")),
-            policy: PolicyOptions::default(),
-            csp: draft_csp(&PolicyOptions::default()),
-        });
+        let state = test_state();
         let metadata = UploadMetadata::default();
         let draft_id = {
             let mut conn = state.db.lock().unwrap();
@@ -928,12 +1043,21 @@ mod tests {
             header::AUTHORIZATION,
             HeaderValue::from_static("Bearer secret"),
         );
-        let before: i64 = state
-            .db
-            .lock()
-            .unwrap()
-            .query_row("SELECT COUNT(*) FROM draft_versions", [], |row| row.get(0))
-            .unwrap();
+        // Publishing a PDF creates neither a version nor a notification.
+        let counts = |state: &AppState| -> (i64, i64) {
+            state
+                .db
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT (SELECT COUNT(*) FROM draft_versions), (SELECT COUNT(*) FROM notification_events)",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap()
+        };
+        let before = counts(&state);
+        assert_eq!(before.1, 2);
         let response = publish_pdf(
             State(state.clone()),
             Path(draft_id.clone()),
@@ -965,13 +1089,7 @@ mod tests {
         assert_eq!(explicit.status(), StatusCode::OK);
         assert_eq!(explicit.headers()["x-keryx-draft-version"], "1");
 
-        let after: i64 = state
-            .db
-            .lock()
-            .unwrap()
-            .query_row("SELECT COUNT(*) FROM draft_versions", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(after, before);
+        assert_eq!(counts(&state), before);
         assert!(!contains_pdf(state.store.root()));
 
         std::fs::remove_dir_all(state.store.root()).ok();
@@ -1007,17 +1125,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn push_subscription_routes_are_authenticated_and_validate_endpoints() {
+        let state = test_state();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer secret"),
+        );
+        let input = |endpoint: &str| {
+            Ok(Json(PushSubscriptionInput {
+                endpoint: endpoint.into(),
+                keys: crate::types::PushKeys {
+                    p256dh: "BPUBLIC".into(),
+                    auth: "AUTH".into(),
+                },
+                events: Some(vec![crate::types::NotificationKind::Woke]),
+            }))
+        };
+
+        let unauthorized = push_vapid(State(state.clone()), HeaderMap::new()).await;
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        let vapid = json_body(push_vapid(State(state.clone()), headers.clone()).await).await;
+        assert_eq!(vapid["publicKey"], state.push.public_key());
+
+        let plain = push_subscribe(
+            State(state.clone()),
+            headers.clone(),
+            input("http://push.example.test/x"),
+        )
+        .await;
+        assert_eq!(plain.status(), StatusCode::BAD_REQUEST);
+
+        let stored = push_subscribe(
+            State(state.clone()),
+            headers.clone(),
+            input("https://push.example.test/x"),
+        )
+        .await;
+        assert_eq!(stored.status(), StatusCode::OK);
+        let body = json_body(stored).await;
+        assert_eq!(body["subscription"]["events"], json!(["woke"]));
+
+        let removed = push_unsubscribe(
+            State(state.clone()),
+            headers,
+            Ok(Json(UnsubscribeBody {
+                endpoint: "https://push.example.test/x".into(),
+            })),
+        )
+        .await;
+        assert_eq!(json_body(removed).await["removed"], true);
+
+        std::fs::remove_dir_all(state.store.root()).ok();
+    }
+
+    #[tokio::test]
     async fn availability_route_owns_every_transition() {
-        let store = crate::storage::test_store();
-        let conn = db::open(&store.root().join("test.db")).unwrap();
-        let state = Arc::new(AppState {
-            db: Mutex::new(conn),
-            store,
-            public_base_url: Some("https://keryx.test".into()),
-            api_key_hash: Some(crate::sha256_hex("secret")),
-            policy: PolicyOptions::default(),
-            csp: draft_csp(&PolicyOptions::default()),
-        });
+        let state = test_state();
         let metadata = UploadMetadata::default();
         let draft_id = {
             let mut conn = state.db.lock().unwrap();

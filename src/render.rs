@@ -314,6 +314,25 @@ pub fn render_dashboard(
         r#"<span class="management-mode">Public view · management via authenticated CLI</span>"#
             .into()
     };
+    // Hidden until the script confirms a secure context with push support.
+    let notify_menu = if management_enabled {
+        r#"<details class="notify-menu" id="notify-menu" hidden>
+        <summary id="notify-summary">Notifications off</summary>
+        <div class="menu notify-panel">
+          <div class="notify-state" id="notify-state"></div>
+          <div class="menu-group">
+            <label class="notify-option"><input type="checkbox" data-event="published" checked> Plan published</label>
+            <label class="notify-option"><input type="checkbox" data-event="revised" checked> Plan revised</label>
+            <label class="notify-option"><input type="checkbox" data-event="woke" checked> Plan woke</label>
+            <label class="notify-option"><input type="checkbox" data-event="enabled" checked> Plan enabled</label>
+            <label class="notify-option"><input type="checkbox" data-event="disabled" checked> Plan disabled</label>
+          </div>
+          <div class="notify-actions"><button class="button primary" id="notify-enable" type="button">Enable on this device</button><button class="button" id="notify-disable" type="button" hidden>Turn off</button></div>
+        </div>
+      </details>"#
+    } else {
+        ""
+    };
 
     format!(
         r#"<!doctype html>
@@ -334,6 +353,7 @@ pub fn render_dashboard(
     <div class="brand"><span class="brand-mark">{KERYX_LOGO}</span>Keryx</div>
     <div class="topbar-tools">
       {management_note}
+      {notify_menu}
       <button class="button install" id="install-app" type="button" hidden>Install Keryx</button>
       <a class="health" href="/healthz">Server healthy</a>
       <label class="theme-control"><span>Theme</span><select id="theme-select" aria-label="Theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
@@ -407,6 +427,7 @@ pub fn render_dashboard(
         disabled_count = disabled_count,
         repo_filter = repo_filter,
         management_note = management_note,
+        notify_menu = notify_menu,
         management_enabled = management_enabled,
         rows = rows,
         empty_hidden = empty_hidden,
@@ -462,6 +483,8 @@ mod tests {
         assert!(html.contains("id=\"snooze-dialog\""));
         assert!(html.contains("<link rel=\"manifest\" href=\"/manifest.webmanifest\">"));
         assert!(html.contains("id=\"install-app\" type=\"button\" hidden"));
+        assert!(html.contains("id=\"notify-menu\" hidden"));
+        assert!(html.contains("data-event=\"woke\""));
         assert!(html.contains("<option value=\"system\">System</option>"));
         assert!(html.contains("<svg"));
         assert!(html.contains("Keryx Dispatch"));
@@ -525,6 +548,7 @@ mod tests {
         assert!(!html.contains("data-action=\"prune\""));
         assert!(!html.contains("data-action=\"purge\""));
         assert!(!html.contains("data-availability-action="));
+        assert!(!html.contains("id=\"notify-menu\""));
         assert!(!html.contains("id=\"repo-filter\""));
         assert!(!html.contains("href=\"/api/drafts/abc123def456/pdf\""));
         assert!(html.contains("Download HTML"));

@@ -26,9 +26,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 tempfile = "3"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
 url = "2"
 usvg = { version = "0.45", default-features = false, features = ["text"] }
+web-push-native = "0.5"
 woff2-patched = "0.4"
 
 [profile.release]

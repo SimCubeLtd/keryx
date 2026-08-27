@@ -3,6 +3,7 @@ mod client;
 mod db;
 mod gitmeta;
 mod ids;
+mod notifications;
 mod pdf;
 mod policy;
 mod render;
