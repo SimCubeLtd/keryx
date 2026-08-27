@@ -92,12 +92,17 @@
     }
   }
 
-  function renderVersions(versions) {
+  function renderVersions(versions, draftId, expanded) {
     var history = document.getElementById("version-history");
     history.replaceChildren();
-    versions.slice(0, 8).forEach(function (version) {
-      var item = document.createElement("div");
+    var visible = expanded ? versions : versions.slice(0, 8);
+    visible.forEach(function (version) {
+      var item = document.createElement("a");
       item.className = "history-item";
+      item.href = "/d/" + encodeURIComponent(draftId) + "/v/" + encodeURIComponent(String(version.versionNumber));
+      item.target = "_blank";
+      item.rel = "noopener noreferrer";
+      item.setAttribute("aria-label", "Open version " + version.versionNumber + " in a new tab");
       var badge = document.createElement("span");
       badge.className = "vbadge";
       badge.textContent = "v" + version.versionNumber;
@@ -115,9 +120,32 @@
       var time = document.createElement("time");
       time.className = "history-time";
       time.textContent = relativeTime(version.createdAt);
-      item.append(badge, content, time);
+      var open = document.createElement("span");
+      open.className = "history-open";
+      open.textContent = "↗";
+      item.append(badge, content, time, open);
       history.append(item);
     });
+
+    if (!expanded && visible.length < versions.length) {
+      var remaining = versions.length - visible.length;
+      var footer = document.createElement("div");
+      footer.className = "history-more";
+      var count = document.createElement("div");
+      count.className = "history-count";
+      var countLabel = document.createElement("strong");
+      countLabel.textContent = "Showing " + visible.length + " of " + versions.length;
+      var order = document.createElement("span");
+      order.textContent = "Newest versions first";
+      count.append(countLabel, order);
+      var button = document.createElement("button");
+      button.className = "history-more-button";
+      button.type = "button";
+      button.textContent = "Load " + remaining + " older " + (remaining === 1 ? "version" : "versions");
+      button.addEventListener("click", function () { renderVersions(versions, draftId, true); });
+      footer.append(count, button);
+      history.append(footer);
+    }
   }
 
   function loadVersions(draftId) {
@@ -136,7 +164,7 @@
         if (selectedId !== draftId) return;
         var versions = body.draft.versions || [];
         state.textContent = versions.length + (versions.length === 1 ? " version" : " versions");
-        renderVersions(versions);
+        renderVersions(versions, draftId, false);
       })
       .catch(function (error) {
         if (selectedId !== draftId) return;

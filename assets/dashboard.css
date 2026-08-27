@@ -219,11 +219,22 @@ a { color: inherit; }
 .history-head { display: flex; align-items: center; margin-top: 5px; padding: 13px 0 8px; border-top: 1px solid var(--line); }
 .history-head h3 { margin: 0; font-size: 11px; }
 .history-state { margin-left: auto; color: var(--text-quiet); font-size: 9px; }
-.history-item { display: grid; grid-template-columns: 33px minmax(0, 1fr) auto; gap: 9px; align-items: center; padding: 9px 0; border-top: 1px solid var(--line); }
+.history-item { display: grid; grid-template-columns: 33px minmax(0, 1fr) auto 25px; gap: 9px; align-items: center; padding: 9px 0; border-top: 1px solid var(--line); text-decoration: none; }
+.history-item:hover { margin-inline: -8px; padding-inline: 8px; border-radius: 6px; background: var(--blue-muted); }
+.history-item:hover .commit, .history-item:hover .history-open { color: var(--blue-strong); }
+.history-item:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 5px; }
 .vbadge { display: grid; place-items: center; width: 30px; height: 23px; border: 1px solid var(--line); border-radius: 5px; color: var(--text-soft); font: 9px var(--mono); background: var(--surface-muted); }
 .commit { overflow: hidden; color: var(--text-soft); font-size: 9px; font-weight: 660; text-overflow: ellipsis; white-space: nowrap; }
 .commit-meta { overflow: hidden; margin-top: 3px; color: var(--text-quiet); font: 8px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
 .history-time { color: var(--text-quiet); font-size: 8px; }
+.history-open { display: grid; place-items: center; width: 25px; height: 25px; color: var(--text-quiet); font-size: 12px; }
+.history-more { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; padding-top: 12px; border-top: 1px solid var(--line); }
+.history-count { color: var(--text-quiet); font-size: 8px; line-height: 1.4; }
+.history-count strong, .history-count span { display: block; }
+.history-count strong { margin-bottom: 2px; color: var(--text-soft); font-size: 9px; }
+.history-more-button { padding: 7px 9px; border: 1px solid var(--line-strong); border-radius: 6px; color: var(--text-soft); font-size: 9px; font-weight: 700; background: var(--surface-raised); }
+.history-more-button:hover { border-color: var(--blue); color: var(--blue-strong); background: var(--blue-muted); }
+.history-more-button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 
 .empty-results { padding: 48px 20px; color: var(--text-muted); font-size: 12px; text-align: center; }
 .empty-results strong { display: block; margin-bottom: 5px; color: var(--text-soft); font-size: 13px; }
@@ -305,11 +316,16 @@ dialog::backdrop { background: rgba(15, 23, 42, .52); }
   .history-head { margin-top: 8px; padding: 18px 0 10px; }
   .history-head h3 { font-size: 13px; }
   .history-state { font-size: 11px; }
-  .history-item { grid-template-columns: 38px minmax(0, 1fr) auto; gap: 11px; padding: 12px 0; }
+  .history-item { grid-template-columns: 38px minmax(0, 1fr) auto 29px; gap: 11px; padding: 12px 0; }
   .vbadge { width: 35px; height: 27px; font-size: 11px; }
   .commit { font-size: 12px; }
   .commit-meta { margin-top: 4px; font-size: 10px; }
   .history-time { font-size: 10px; }
+  .history-open { width: 29px; height: 29px; font-size: 14px; }
+  .history-more { gap: 14px; padding-top: 15px; }
+  .history-count { font-size: 10px; }
+  .history-count strong { font-size: 11px; }
+  .history-more-button { padding: 8px 11px; font-size: 11px; }
 
   dialog { width: min(520px, calc(100% - 40px)); }
   .dialog-body { padding: 30px; }
