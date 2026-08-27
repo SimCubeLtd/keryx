@@ -70,6 +70,14 @@ impl Availability {
             Self::Active
         }
     }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Snoozed => "snoozed",
+            Self::Disabled => "disabled",
+        }
+    }
 }
 
 /// A requested availability transition. On the wire:

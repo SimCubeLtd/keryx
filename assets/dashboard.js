@@ -15,16 +15,19 @@
     try { localStorage.setItem(themeKey, themeSelect.value); } catch (_) {}
   });
 
+  var VIEWS = ["active", "snoozed", "disabled"];
   var rows = Array.from(document.querySelectorAll(".draft-row"));
   var tbody = document.getElementById("draft-rows");
   var search = document.getElementById("draft-search");
-  var filters = Array.from(document.querySelectorAll("[data-filter]"));
+  var tabs = Array.from(document.querySelectorAll("[data-view]"));
   var repoFilter = document.getElementById("repo-filter");
   var sort = document.getElementById("draft-sort");
   var resultCount = document.getElementById("result-count");
   var emptyResults = document.getElementById("empty-results");
+  var timeColumn = document.getElementById("time-column");
   var managementEnabled = document.body.dataset.managementEnabled === "true";
   var selectedId = null;
+  var view = "active";
 
   function relativeTime(value) {
     var timestamp = Date.parse(value);
@@ -40,6 +43,27 @@
     return new Date(timestamp).toLocaleDateString();
   }
 
+  function relativeFuture(value) {
+    var timestamp = Date.parse(value);
+    if (!Number.isFinite(timestamp)) return "";
+    var seconds = Math.max(0, Math.floor((timestamp - Date.now()) / 1000));
+    if (seconds < 60) return "in under a minute";
+    var minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return "in " + minutes + (minutes === 1 ? " minute" : " minutes");
+    var hours = Math.floor(minutes / 60);
+    if (hours < 48) return "in " + hours + (hours === 1 ? " hour" : " hours");
+    var days = Math.floor(hours / 24);
+    return "in " + days + " days";
+  }
+
+  function wakeLabel(value) {
+    var timestamp = Date.parse(value);
+    if (!Number.isFinite(timestamp)) return value || "";
+    return new Date(timestamp).toLocaleString(undefined, {
+      weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"
+    });
+  }
+
   function fileSize(bytes) {
     if (!Number.isFinite(bytes)) return "";
     if (bytes < 1024) return bytes + " B";
@@ -52,8 +76,51 @@
     if (element) element.textContent = value || "Not recorded";
   }
 
-  function populateSummary(row) {
+  // Availability is derived the same way the server derives it: disabled
+  // wins, then a future wake time means snoozed, otherwise active.
+  function deriveAvailability(row) {
+    if (row.dataset.disabled === "true") return "disabled";
+    var until = Date.parse(row.dataset.snoozedUntil || "");
+    return Number.isFinite(until) && until > Date.now() ? "snoozed" : "active";
+  }
+
+  function syncAvailability(row) {
+    var derived = deriveAvailability(row);
+    var changed = row.dataset.availability !== derived;
+    row.dataset.availability = derived;
+    return changed;
+  }
+
+  function renderRowTime(row) {
+    var time = row.querySelector(".updated");
+    var detail = row.querySelector(".version");
+    if (row.dataset.availability === "snoozed") {
+      time.textContent = "Wakes " + relativeFuture(row.dataset.snoozedUntil);
+      time.title = row.dataset.snoozedUntil;
+      time.classList.add("wake");
+      detail.textContent = wakeLabel(row.dataset.snoozedUntil);
+    } else {
+      time.textContent = relativeTime(row.dataset.updated);
+      time.title = row.dataset.updated;
+      time.classList.remove("wake");
+      var count = Number(row.dataset.versionCount);
+      detail.textContent = "v" + row.dataset.latestVersion + " · " + count + (count === 1 ? " version" : " versions");
+    }
+  }
+
+  function updateCounts() {
+    var counts = { active: 0, snoozed: 0, disabled: 0 };
+    rows.forEach(function (row) { counts[row.dataset.availability] += 1; });
+    VIEWS.forEach(function (key) {
+      var badge = document.querySelector('[data-count="' + key + '"]');
+      if (badge) badge.textContent = counts[key];
+    });
+    return counts;
+  }
+
+  function populateSummary(row, keepHistory) {
     if (!row) return;
+    var changedSelection = selectedId !== row.dataset.draftId;
     selectedId = row.dataset.draftId;
     rows.forEach(function (candidate) {
       var selected = candidate === row;
@@ -61,10 +128,10 @@
       candidate.setAttribute("aria-selected", String(selected));
     });
 
-    var disabled = row.dataset.disabled === "true";
+    var state = row.dataset.availability;
     var status = document.getElementById("detail-status");
-    status.textContent = disabled ? "Disabled" : "Active";
-    status.classList.toggle("disabled", disabled);
+    status.textContent = state.charAt(0).toUpperCase() + state.slice(1);
+    status.className = "status " + state;
     setText("detail-title", row.dataset.title);
     setText("detail-description", row.dataset.description || "No description supplied.");
     setText("detail-origin", row.dataset.repoHost);
@@ -75,15 +142,30 @@
     setText("detail-version", "Version " + row.dataset.latestVersion + " of " + row.dataset.versionCount);
     setText("detail-commit", row.dataset.commitSubject || row.dataset.commitSha);
 
+    var availability = document.getElementById("detail-availability");
+    availability.hidden = state === "active";
+    availability.className = "detail-availability " + state;
+    if (state === "snoozed") {
+      availability.textContent = "Snoozed until " + wakeLabel(row.dataset.snoozedUntil) + " (" + relativeFuture(row.dataset.snoozedUntil) + "). Public links keep working while it sleeps.";
+    } else if (state === "disabled") {
+      availability.textContent = "Disabled. Public, raw, versioned, and PDF links return 404 until the draft is enabled.";
+    }
+
     var open = document.getElementById("detail-open");
     var pdf = document.getElementById("detail-pdf");
+    var unavailable = state === "disabled";
     open.href = row.dataset.publicUrl;
-    var unavailable = disabled;
     open.setAttribute("aria-disabled", String(unavailable));
     if (pdf) {
       pdf.href = "/api/drafts/" + encodeURIComponent(row.dataset.draftId) + "/pdf";
       pdf.setAttribute("aria-disabled", String(unavailable));
     }
+    var visibleActions = { active: ["snooze", "disable"], snoozed: ["unsnooze", "disable"], disabled: ["enable"] }[state];
+    document.querySelectorAll("[data-availability-action]").forEach(function (button) {
+      button.hidden = !visibleActions.includes(button.dataset.availabilityAction);
+    });
+
+    if (keepHistory && !changedSelection) return;
     if (managementEnabled) {
       loadVersions(row.dataset.draftId);
     } else {
@@ -173,37 +255,47 @@
       });
   }
 
-  function activeFilters() {
-    return filters.filter(function (filter) { return filter.dataset.filter !== "all" && filter.getAttribute("aria-pressed") === "true"; })
-      .map(function (filter) { return filter.dataset.filter; });
-  }
-
-  function matches(row, query, active) {
+  function matches(row, query) {
+    if (row.dataset.availability !== view) return false;
     if (query && !row.dataset.search.includes(query)) return false;
     if (repoFilter && repoFilter.value && row.dataset.repository !== repoFilter.value) return false;
-    if (active.includes("recent") && Date.now() - Date.parse(row.dataset.updated) > 7 * 24 * 60 * 60 * 1000) return false;
-    if (active.includes("multi") && Number(row.dataset.versionCount) < 2) return false;
-    if (active.includes("disabled") && row.dataset.disabled !== "true") return false;
-    if (active.includes("missing") && row.dataset.provenanceRecorded === "true") return false;
     return true;
   }
 
+  var EMPTY_HINTS = {
+    active: "Publish one with keryx upload ./plan.html",
+    snoozed: "Snooze a draft to park it until a wake time.",
+    disabled: "Disable a draft to stop serving it."
+  };
+
   function applyFilters() {
     var query = search.value.trim().toLocaleLowerCase();
-    var active = activeFilters();
+    var counts = updateCounts();
     var visible = [];
     rows.forEach(function (row) {
-      var show = matches(row, query, active);
+      var show = matches(row, query);
       row.hidden = !show;
       if (show) visible.push(row);
     });
-    resultCount.textContent = visible.length + (visible.length === 1 ? " draft" : " drafts");
+    resultCount.textContent = (visible.length === counts[view] ? "" : visible.length + " of ") + counts[view] + " " + view;
     emptyResults.hidden = visible.length !== 0;
-    if (!visible.some(function (row) { return row.dataset.draftId === selectedId; })) {
-      if (visible[0]) populateSummary(visible[0]);
-      else document.getElementById("draft-detail").classList.add("empty");
+    if (counts[view] === 0) {
+      setText("empty-title", "No " + view + " drafts");
+      setText("empty-hint", EMPTY_HINTS[view]);
     } else {
-      document.getElementById("draft-detail").classList.remove("empty");
+      setText("empty-title", "No matching drafts");
+      setText("empty-hint", "Adjust the search or repository filter.");
+    }
+    var detail = document.getElementById("draft-detail");
+    if (!visible.some(function (row) { return row.dataset.draftId === selectedId; })) {
+      if (visible[0]) {
+        detail.classList.remove("empty");
+        populateSummary(visible[0]);
+      } else {
+        detail.classList.add("empty");
+      }
+    } else {
+      detail.classList.remove("empty");
     }
   }
 
@@ -219,16 +311,30 @@
     applyFilters();
   }
 
-  filters.forEach(function (filter) {
-    filter.addEventListener("click", function () {
-      if (filter.dataset.filter === "all") {
-        filters.forEach(function (candidate) { candidate.setAttribute("aria-pressed", String(candidate === filter)); });
-      } else {
-        filter.setAttribute("aria-pressed", String(filter.getAttribute("aria-pressed") !== "true"));
-        filters.find(function (candidate) { return candidate.dataset.filter === "all"; }).setAttribute("aria-pressed", "false");
-        if (activeFilters().length === 0) filters.find(function (candidate) { return candidate.dataset.filter === "all"; }).setAttribute("aria-pressed", "true");
-      }
-      applyFilters();
+  function setView(next) {
+    if (!VIEWS.includes(next)) next = "active";
+    view = next;
+    tabs.forEach(function (tab) { tab.setAttribute("aria-selected", String(tab.dataset.view === view)); });
+    timeColumn.textContent = view === "snoozed" ? "Wakes" : "Updated";
+    search.placeholder = "Search " + view + " drafts…";
+    applyFilters();
+  }
+
+  function syncUrl() {
+    var params = new URLSearchParams();
+    if (selectedId) params.set("draft", selectedId);
+    params.set("view", view);
+    history.replaceState(null, "", "/?" + params.toString());
+  }
+
+  function findRow(draftId) {
+    return rows.find(function (candidate) { return candidate.dataset.draftId === draftId; });
+  }
+
+  tabs.forEach(function (tab) {
+    tab.addEventListener("click", function () {
+      setView(tab.dataset.view);
+      syncUrl();
     });
   });
   search.addEventListener("input", applyFilters);
@@ -242,15 +348,18 @@
   });
 
   rows.forEach(function (row) {
-    row.querySelector(".updated").textContent = relativeTime(row.dataset.updated);
+    syncAvailability(row);
+    renderRowTime(row);
     row.addEventListener("click", function (event) {
       if (event.target.closest("a, button, details, summary")) return;
       populateSummary(row);
+      syncUrl();
     });
     row.addEventListener("keydown", function (event) {
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
         populateSummary(row);
+        syncUrl();
       }
     });
   });
@@ -260,6 +369,158 @@
       if (!menu.contains(event.target)) menu.removeAttribute("open");
     });
   });
+
+  // --- availability -----------------------------------------------------
+
+  var wakeTimer = null;
+
+  // Snoozes expire on the client the same way they do on the server: by the
+  // clock, without a request. Rows that pass their wake time move to Active.
+  function scheduleWake() {
+    if (wakeTimer) clearTimeout(wakeTimer);
+    wakeTimer = null;
+    var next = Infinity;
+    rows.forEach(function (row) {
+      if (row.dataset.availability !== "snoozed") return;
+      next = Math.min(next, Date.parse(row.dataset.snoozedUntil));
+    });
+    if (!Number.isFinite(next)) return;
+    var delay = Math.min(Math.max(next - Date.now(), 0) + 500, 24 * 60 * 60 * 1000);
+    wakeTimer = setTimeout(function () {
+      var woke = rows.filter(function (row) { return syncAvailability(row); });
+      woke.forEach(function (row) {
+        renderRowTime(row);
+        if (row.dataset.draftId === selectedId) populateSummary(row, true);
+      });
+      if (woke.length === 1) showToast("“" + woke[0].dataset.title + "” woke and is active again.", false);
+      else if (woke.length > 1) showToast(woke.length + " drafts woke and are active again.", false);
+      applyFilters();
+      scheduleWake();
+    }, delay);
+  }
+
+  function applyDraft(row, draft) {
+    row.dataset.disabled = String(Boolean(draft.disabled));
+    row.dataset.snoozedUntil = draft.snoozedUntil || "";
+    row.dataset.updated = draft.updatedAt || row.dataset.updated;
+    syncAvailability(row);
+    renderRowTime(row);
+    if (row.dataset.draftId === selectedId) populateSummary(row, true);
+    applyFilters();
+    syncUrl();
+    scheduleWake();
+  }
+
+  function setAvailability(row, update, describe) {
+    var buttons = Array.from(document.querySelectorAll("[data-availability-action]"));
+    buttons.forEach(function (button) { button.disabled = true; });
+    return fetch("/api/drafts/" + encodeURIComponent(row.dataset.draftId) + "/availability", {
+      method: "PUT",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify(update)
+    })
+      .then(function (response) {
+        return response.json().catch(function () { return {}; }).then(function (body) {
+          if (!response.ok) {
+            throw new Error(response.status === 401 ? "API key required. Use the CLI for this action." : (body.error || "The draft could not be updated."));
+          }
+          return body;
+        });
+      })
+      .then(function (body) {
+        applyDraft(row, body.draft);
+        showToast(describe(body.draft), false);
+      })
+      .catch(function (error) { showToast(error.message, true); })
+      .finally(function () { buttons.forEach(function (button) { button.disabled = false; }); });
+  }
+
+  var snoozeDialog = document.getElementById("snooze-dialog");
+  var snoozeInput = document.getElementById("snooze-until");
+  var snoozePreview = document.getElementById("snooze-preview");
+  var presets = Array.from(document.querySelectorAll("[data-preset]"));
+
+  function toLocalInput(date) {
+    var pad = function (n) { return String(n).padStart(2, "0"); };
+    return date.getFullYear() + "-" + pad(date.getMonth() + 1) + "-" + pad(date.getDate()) + "T" + pad(date.getHours()) + ":" + pad(date.getMinutes());
+  }
+
+  function presetDate(preset) {
+    var date = new Date();
+    if (preset === "1h") date.setHours(date.getHours() + 1);
+    else if (preset === "4h") date.setHours(date.getHours() + 4);
+    else if (preset === "tomorrow") { date.setDate(date.getDate() + 1); date.setHours(9, 0, 0, 0); }
+    else if (preset === "monday") {
+      var ahead = (8 - date.getDay()) % 7 || 7;
+      date.setDate(date.getDate() + ahead);
+      date.setHours(9, 0, 0, 0);
+    }
+    date.setSeconds(0, 0);
+    return date;
+  }
+
+  function updateSnoozePreview() {
+    var timestamp = Date.parse(snoozeInput.value);
+    var confirm = document.getElementById("snooze-confirm");
+    if (!Number.isFinite(timestamp) || timestamp <= Date.now()) {
+      snoozePreview.textContent = "Pick a wake time in the future.";
+      confirm.disabled = true;
+      return;
+    }
+    snoozePreview.textContent = "Wakes " + wakeLabel(new Date(timestamp).toISOString()) + " (" + relativeFuture(new Date(timestamp).toISOString()) + ")";
+    confirm.disabled = false;
+  }
+
+  function openSnoozeDialog(row) {
+    setText("snooze-draft-title", row.dataset.title);
+    setText("snooze-draft-id", row.dataset.draftId);
+    presets.forEach(function (preset) { preset.setAttribute("aria-pressed", String(preset.dataset.preset === "tomorrow")); });
+    snoozeInput.min = toLocalInput(new Date());
+    snoozeInput.value = toLocalInput(presetDate("tomorrow"));
+    updateSnoozePreview();
+    snoozeDialog.showModal();
+  }
+
+  if (managementEnabled) {
+    presets.forEach(function (preset) {
+      preset.addEventListener("click", function () {
+        presets.forEach(function (candidate) { candidate.setAttribute("aria-pressed", String(candidate === preset)); });
+        snoozeInput.value = toLocalInput(presetDate(preset.dataset.preset));
+        updateSnoozePreview();
+      });
+    });
+    snoozeInput.addEventListener("input", function () {
+      presets.forEach(function (candidate) { candidate.setAttribute("aria-pressed", "false"); });
+      updateSnoozePreview();
+    });
+    document.getElementById("snooze-cancel").addEventListener("click", function () { snoozeDialog.close(); });
+    document.getElementById("snooze-confirm").addEventListener("click", function () {
+      var row = findRow(selectedId);
+      var timestamp = Date.parse(snoozeInput.value);
+      if (!row || !Number.isFinite(timestamp)) return;
+      snoozeDialog.close();
+      setAvailability(row, { state: "snoozed", until: new Date(timestamp).toISOString() }, function (draft) {
+        return "Snoozed until " + wakeLabel(draft.snoozedUntil) + ". Public links keep working.";
+      });
+    });
+
+    document.querySelectorAll("[data-availability-action]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        var row = findRow(selectedId);
+        if (!row) return;
+        var action = button.dataset.availabilityAction;
+        if (action === "snooze") return openSnoozeDialog(row);
+        if (action === "disable") {
+          return setAvailability(row, { state: "disabled" }, function () { return "Draft disabled. Public links now return 404."; });
+        }
+        setAvailability(row, { state: "active" }, function () {
+          return action === "unsnooze" ? "Draft is active again." : "Draft enabled. Public links work again.";
+        });
+      });
+    });
+  }
+
+  // --- prune ------------------------------------------------------------
 
   var dialog = document.getElementById("prune-dialog");
   var confirmAction = document.getElementById("confirm-action");
@@ -297,7 +558,7 @@
           return response.json();
         })
         .then(function () {
-          var row = rows.find(function (candidate) { return candidate.dataset.draftId === pending.id; });
+          var row = findRow(pending.id);
           if (row) {
             rows = rows.filter(function (candidate) { return candidate !== row; });
             row.remove();
@@ -306,6 +567,7 @@
           showToast(pending.action === "purge" ? "Draft permanently deleted." : "Draft pruned.", false);
           pending = null;
           applyFilters();
+          scheduleWake();
         })
         .catch(function (error) { showToast(error.message, true); })
         .finally(function () { confirmAction.disabled = false; });
@@ -320,6 +582,19 @@
     window.setTimeout(function () { toast.hidden = true; }, 4200);
   }
 
-  if (rows[0]) populateSummary(rows[0]);
+  // --- deep links -------------------------------------------------------
+  // /?draft=<id>&view=<availability> selects a tab and a draft. A draft that
+  // lives in another tab wins over the view parameter.
+
+  var params = new URLSearchParams(location.search);
+  var linkedRow = params.get("draft") ? findRow(params.get("draft")) : null;
+  var linkedView = params.get("view") || "active";
+  if (linkedRow) linkedView = linkedRow.dataset.availability;
   applySort();
+  setView(linkedView);
+  if (linkedRow && !linkedRow.hidden) {
+    populateSummary(linkedRow);
+    linkedRow.scrollIntoView({ block: "nearest" });
+  }
+  scheduleWake();
 })();
