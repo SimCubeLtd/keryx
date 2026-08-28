@@ -5,6 +5,7 @@
 //! snoozes into wake events. Payload encryption (RFC 8291) and VAPID
 //! signing (RFC 8292) come from web-push-native, never from Keryx itself.
 
+use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -31,6 +32,9 @@ const MAX_ATTEMPTS: i64 = 6;
 const PUSH_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const IDLE_SLEEP: Duration = Duration::from_secs(60 * 60);
 const BATCH: usize = 50;
+/// Deliveries in flight at once; one slow push service must not hold up
+/// the rest of a batch.
+const CONCURRENCY: usize = 8;
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -172,6 +176,93 @@ pub fn backoff_seconds(attempts: i64) -> i64 {
     30 * 2_i64.pow(attempts.clamp(0, 10) as u32)
 }
 
+/// Push endpoints are public, vendor-run services. Refusing anything else
+/// stops a subscription from turning the dispatcher into a probe of the
+/// server's own network. Names are checked again at connection time by
+/// [`PublicResolver`], after DNS.
+pub fn check_endpoint(endpoint: &str) -> Result<()> {
+    let url = url::Url::parse(endpoint).context("endpoint is not a valid URL")?;
+    if url.scheme() != "https" {
+        bail!("endpoint must use https");
+    }
+    match url.host() {
+        None => bail!("endpoint has no host"),
+        Some(url::Host::Domain(domain)) => {
+            let name = domain.trim_end_matches('.').to_ascii_lowercase();
+            let internal = name == "localhost"
+                || !name.contains('.')
+                || [".localhost", ".local", ".internal", ".home.arpa"]
+                    .iter()
+                    .any(|suffix| name.ends_with(suffix));
+            if internal {
+                bail!("endpoint host {domain:?} is not a public name");
+            }
+        }
+        Some(url::Host::Ipv4(ip)) if !is_public(IpAddr::V4(ip)) => {
+            bail!("endpoint address {ip} is not public")
+        }
+        Some(url::Host::Ipv6(ip)) if !is_public(IpAddr::V6(ip)) => {
+            bail!("endpoint address {ip} is not public")
+        }
+        Some(_) => {}
+    }
+    Ok(())
+}
+
+/// Globally routable unicast only: no loopback, private, link-local,
+/// shared (CGNAT), documentation, multicast, or reserved space.
+pub fn is_public(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            !(v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_broadcast()
+                || v4.is_documentation()
+                || v4.is_unspecified()
+                || v4.is_multicast()
+                || o[0] == 0
+                || (o[0] == 100 && (64..=127).contains(&o[1]))
+                || (o[0] == 192 && o[1] == 0 && o[2] == 0)
+                || (o[0] == 198 && (o[1] == 18 || o[1] == 19))
+                || o[0] >= 240)
+        }
+        IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_public(IpAddr::V4(v4));
+            }
+            let s = v6.segments();
+            !(v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                || v6.is_unique_local()
+                || v6.is_unicast_link_local()
+                || (s[0] == 0x2001 && s[1] == 0x0db8))
+        }
+    }
+}
+
+/// System DNS with every non-public address dropped, so a name that points
+/// (or is later rebound) inside the network never gets a connection.
+struct PublicResolver;
+
+impl reqwest::dns::Resolve for PublicResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let host = name.as_str().to_string();
+        Box::pin(async move {
+            let public: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), 0))
+                .await?
+                .filter(|address| is_public(address.ip()))
+                .collect();
+            if public.is_empty() {
+                return Err(format!("{host} resolves to no public address").into());
+            }
+            Ok(Box::new(public.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
 fn decode_key(value: &str, what: &str) -> Result<Vec<u8>> {
     URL_SAFE_NO_PAD
         .decode(value.trim().trim_end_matches('='))
@@ -181,6 +272,7 @@ fn decode_key(value: &str, what: &str) -> Result<Vec<u8>> {
 /// Encrypt the event payload for one subscription and sign it with VAPID.
 /// The payload carries only display text and a same-origin path.
 pub fn build_request(hub: &PushHub, delivery: &PendingDelivery) -> Result<Request<Vec<u8>>> {
+    check_endpoint(&delivery.endpoint)?;
     let endpoint: Uri = delivery
         .endpoint
         .parse()
@@ -245,7 +337,8 @@ pub fn apply_outcome(
                 db::delivery_done(conn, key, subscription)?;
                 eprintln!("push: giving up on {key} for {subscription} after {attempts} attempts");
             } else {
-                let next = Utc::now() + chrono::Duration::seconds(backoff_seconds(attempts));
+                let next =
+                    Utc::now() + chrono::Duration::seconds(backoff_seconds(delivery.attempts));
                 db::delivery_retry(
                     conn,
                     key,
@@ -281,9 +374,13 @@ fn sleep_until(next: Option<String>) -> Duration {
 /// a handler calls [`PushHub::wake`]. The first pass after a restart picks up
 /// anything that came due while the server was down.
 pub async fn run_dispatcher(db: Arc<Mutex<Connection>>, hub: Arc<PushHub>) {
+    // No redirects: an approved endpoint must not be able to forward the
+    // request somewhere the endpoint policy would have refused.
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
         .user_agent(format!("keryx/{}", env!("CARGO_PKG_VERSION")))
+        .redirect(reqwest::redirect::Policy::none())
+        .dns_resolver(Arc::new(PublicResolver))
         .build()
         .expect("reqwest client");
 
@@ -305,11 +402,29 @@ pub async fn run_dispatcher(db: Arc<Mutex<Connection>>, hub: Arc<PushHub>) {
             })
         };
         let drained = due.len() < BATCH;
-        for delivery in due {
-            let outcome = deliver(&client, &hub, &delivery).await;
-            let conn = db.lock().unwrap();
-            if let Err(error) = apply_outcome(&conn, &delivery, outcome) {
-                eprintln!("notifications: updating delivery failed: {error:#}");
+        let mut pending = due.into_iter();
+        let mut in_flight = tokio::task::JoinSet::new();
+        loop {
+            while in_flight.len() < CONCURRENCY {
+                let Some(delivery) = pending.next() else {
+                    break;
+                };
+                let client = client.clone();
+                let hub = hub.clone();
+                in_flight.spawn(async move {
+                    let outcome = deliver(&client, &hub, &delivery).await;
+                    (delivery, outcome)
+                });
+            }
+            match in_flight.join_next().await {
+                Some(Ok((delivery, outcome))) => {
+                    let conn = db.lock().unwrap();
+                    if let Err(error) = apply_outcome(&conn, &delivery, outcome) {
+                        eprintln!("notifications: updating delivery failed: {error:#}");
+                    }
+                }
+                Some(Err(error)) => eprintln!("notifications: delivery task failed: {error}"),
+                None => break,
             }
         }
         if !drained {
@@ -347,8 +462,49 @@ mod tests {
         assert_eq!(classify(503), DeliveryOutcome::Retry);
         assert!(matches!(classify(400), DeliveryOutcome::Rejected(_)));
         assert!(matches!(classify(413), DeliveryOutcome::Rejected(_)));
+        assert_eq!(backoff_seconds(0), 30);
         assert_eq!(backoff_seconds(1), 60);
         assert_eq!(backoff_seconds(4), 480);
+    }
+
+    #[test]
+    fn endpoint_policy_accepts_public_push_services_only() {
+        for endpoint in [
+            "https://fcm.googleapis.com/fcm/send/abc",
+            "https://updates.push.services.mozilla.com/wpush/v2/abc",
+            "https://web.push.apple.com/abc",
+            "https://[2606:4700::1]/push",
+            "https://93.184.216.34/push",
+        ] {
+            assert!(
+                check_endpoint(endpoint).is_ok(),
+                "{endpoint} should be accepted"
+            );
+        }
+        for endpoint in [
+            "http://fcm.googleapis.com/fcm/send/abc",
+            "https://localhost/push",
+            "https://keryx/push",
+            "https://printer.local/push",
+            "https://vault.internal/push",
+            "https://127.0.0.1:1/push",
+            "https://10.0.0.5/push",
+            "https://192.168.1.10/push",
+            "https://172.16.0.1/push",
+            "https://169.254.169.254/latest/meta-data",
+            "https://100.100.1.1/push",
+            "https://0.0.0.0/push",
+            "https://[::1]/push",
+            "https://[fd00::1]/push",
+            "https://[fe80::1]/push",
+            "https://[::ffff:127.0.0.1]/push",
+            "not a url",
+        ] {
+            assert!(
+                check_endpoint(endpoint).is_err(),
+                "{endpoint} should be rejected"
+            );
+        }
     }
 
     #[test]
@@ -439,7 +595,12 @@ mod tests {
             .is_empty());
         let retried = db::due_deliveries(&conn, far_future, 10).unwrap().remove(0);
         assert_eq!(retried.attempts, 1);
-        assert!(db::next_delivery_at(&conn).unwrap().unwrap() > db::now());
+        // The first retry waits the documented 30 seconds.
+        let next = DateTime::parse_from_rfc3339(&db::next_delivery_at(&conn).unwrap().unwrap())
+            .unwrap()
+            .with_timezone(&Utc);
+        let wait = (next - Utc::now()).num_seconds();
+        assert!((25..=30).contains(&wait), "first retry waits {wait}s");
 
         let exhausted = PendingDelivery {
             attempts: MAX_ATTEMPTS - 1,

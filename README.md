@@ -188,6 +188,10 @@ Delivery is store-first: an event is written in the same SQLite transaction
 as the draft change and queued once per opted-in subscription, then a
 background dispatcher sends it, retries temporary push-service failures with
 doubling delays, and removes subscriptions the service reports as expired.
+Subscription endpoints must be public `https` hosts: private, loopback,
+link-local, and other reserved addresses are refused when subscribing, again
+after DNS resolution on every connection, and the dispatcher never follows
+redirects.
 A wake is keyed by its snooze timestamp, so it is sent exactly once even if
 the server restarts around the wake time; the dispatcher rebuilds its
 schedule on startup. The server's VAPID key pair is created on first run at

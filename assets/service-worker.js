@@ -11,9 +11,16 @@ self.addEventListener("activate", function (event) {
 });
 
 // Only a same-origin absolute path is ever navigated to. Anything else in a
-// payload falls back to the dashboard root.
+// payload falls back to the dashboard root. Backslashes are refused because
+// the URL parser treats "/\evil.com" as protocol-relative, and the resolved
+// origin is checked as well so no parser quirk can escape.
 function sameOriginPath(value) {
-  if (typeof value !== "string" || value.charAt(0) !== "/" || value.charAt(1) === "/") return "/";
+  if (typeof value !== "string" || value.charAt(0) !== "/" || value.charAt(1) === "/" || value.indexOf("\\") !== -1) return "/";
+  try {
+    if (new URL(value, self.location.origin).origin !== self.location.origin) return "/";
+  } catch (_) {
+    return "/";
+  }
   return value;
 }
 

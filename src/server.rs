@@ -837,10 +837,10 @@ async fn push_subscribe(
             )
         }
     };
-    if !input.endpoint.starts_with("https://") {
+    if let Err(error) = notifications::check_endpoint(&input.endpoint) {
         return json_error(
             StatusCode::BAD_REQUEST,
-            "Subscription endpoint must be an https URL.",
+            &format!("Subscription endpoint rejected: {error}."),
         );
     }
     let result = {
