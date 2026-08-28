@@ -5,15 +5,24 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use chrono::{SecondsFormat, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::ids::{new_draft_id, new_internal_id};
 use crate::storage::BlobStore;
-use crate::types::{DraftSummary, UploadMetadata, VersionInfo};
+use crate::types::{
+    AvailabilityUpdate, DraftSummary, NotificationEvent, NotificationKind, PushSubscriptionInput,
+    PushSubscriptionSummary, UploadMetadata, VersionInfo,
+};
 
 pub fn now() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+    format_timestamp(Utc::now())
+}
+
+/// Every stored timestamp uses this one shape, so string comparison in SQL
+/// orders correctly and equal instants compare equal.
+pub fn format_timestamp(value: DateTime<Utc>) -> String {
+    value.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 pub fn open(path: &Path) -> Result<Connection> {
@@ -44,7 +53,8 @@ fn init(conn: &Connection) -> Result<()> {
             updated_at TEXT NOT NULL,
             deleted_at TEXT,
             disabled_at TEXT,
-            disabled_reason TEXT
+            disabled_reason TEXT,
+            snoozed_until TEXT
         );
 
         CREATE TABLE IF NOT EXISTS draft_versions (
@@ -73,6 +83,36 @@ fn init(conn: &Connection) -> Result<()> {
 
         CREATE INDEX IF NOT EXISTS draft_versions_draft_id_idx ON draft_versions(draft_id);
         CREATE INDEX IF NOT EXISTS drafts_updated_at_idx ON drafts(updated_at);
+
+        CREATE TABLE IF NOT EXISTS push_subscriptions (
+            id TEXT PRIMARY KEY,
+            endpoint TEXT NOT NULL UNIQUE,
+            p256dh TEXT NOT NULL,
+            auth TEXT NOT NULL,
+            events TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS notification_events (
+            key TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            draft_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            target TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS notification_deliveries (
+            event_key TEXT NOT NULL REFERENCES notification_events(key) ON DELETE CASCADE,
+            subscription_id TEXT NOT NULL REFERENCES push_subscriptions(id) ON DELETE CASCADE,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            next_attempt_at TEXT NOT NULL,
+            PRIMARY KEY (event_key, subscription_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS notification_deliveries_due_idx ON notification_deliveries(next_attempt_at);
         "#,
     )?;
 
@@ -119,6 +159,19 @@ fn init(conn: &Connection) -> Result<()> {
             "#,
         )?;
         tx.pragma_update(None, "user_version", 1)?;
+        tx.commit()?;
+    }
+
+    // Schema version 2 adds snooze: a nullable wake time on the draft row.
+    if schema_version < 2 {
+        let tx = conn.unchecked_transaction()?;
+        if !table_columns(&tx, "drafts")?
+            .iter()
+            .any(|column| column == "snoozed_until")
+        {
+            tx.execute("ALTER TABLE drafts ADD COLUMN snoozed_until TEXT", [])?;
+        }
+        tx.pragma_update(None, "user_version", 2)?;
         tx.commit()?;
     }
     Ok(())
@@ -310,6 +363,13 @@ pub fn record_upload(
         ],
     )?;
 
+    let event = if created {
+        NotificationEvent::published(&draft_id, &title, &version_id, &timestamp)
+    } else {
+        NotificationEvent::revised(&draft_id, &title, &version_id, version_number, &timestamp)
+    };
+    record_event(&tx, &event)?;
+
     tx.commit()?;
 
     Ok(UploadOutcome {
@@ -393,57 +453,63 @@ pub fn find_public_version(
     )
 }
 
+const SUMMARY_SELECT: &str = r#"
+    SELECT
+        d.id, d.title, d.description,
+        cv.repo_org,
+        cv.repo_name,
+        cv.repo_host,
+        d.created_at, d.updated_at, d.disabled_at,
+        cv.version_number, cv.created_at, cv.git_branch, cv.git_commit_sha,
+        cv.git_commit_subject, cv.git_dirty,
+        (SELECT COUNT(*) FROM draft_versions v WHERE v.draft_id = d.id),
+        d.snoozed_until
+    FROM drafts d
+    LEFT JOIN draft_versions cv ON cv.id = d.current_version_id
+    WHERE d.deleted_at IS NULL
+"#;
+
+fn read_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<DraftSummary> {
+    Ok(DraftSummary {
+        draft_id: row.get(0)?,
+        title: row.get(1)?,
+        description: row.get(2)?,
+        repo_org: row.get(3)?,
+        repo_name: row.get(4)?,
+        repo_host: row.get(5)?,
+        created_at: row.get(6)?,
+        updated_at: row.get(7)?,
+        disabled: row.get::<_, Option<String>>(8)?.is_some(),
+        latest_version_number: row.get(9)?,
+        latest_version_at: row.get(10)?,
+        latest_git_branch: row.get(11)?,
+        latest_git_commit_sha: row.get(12)?,
+        latest_git_commit_subject: row.get(13)?,
+        latest_git_dirty: row.get(14)?,
+        version_count: row.get(15)?,
+        snoozed_until: row.get(16)?,
+        public_url: String::new(),
+        raw_url: String::new(),
+    })
+}
+
 /// Every live draft, newest first, with the aggregates the dashboard, CLI, and
-/// TUI need. `public_url`/`raw_url` are filled in by the server layer.
+/// TUI need. Snoozed drafts are included; callers derive the display state.
+/// `public_url`/`raw_url` are filled in by the server layer.
 pub fn list_drafts(conn: &Connection) -> Result<Vec<DraftSummary>> {
-    let mut statement = conn.prepare(
-        r#"
-        SELECT
-            d.id, d.title, d.description,
-            cv.repo_org,
-            cv.repo_name,
-            cv.repo_host,
-            d.created_at, d.updated_at, d.disabled_at,
-            cv.version_number, cv.created_at, cv.git_branch, cv.git_commit_sha,
-            cv.git_commit_subject, cv.git_dirty,
-            (SELECT COUNT(*) FROM draft_versions v WHERE v.draft_id = d.id)
-        FROM drafts d
-        LEFT JOIN draft_versions cv ON cv.id = d.current_version_id
-        WHERE d.deleted_at IS NULL
-        ORDER BY d.updated_at DESC
-        "#,
-    )?;
-
-    let rows = statement.query_map([], |row| {
-        Ok(DraftSummary {
-            draft_id: row.get(0)?,
-            title: row.get(1)?,
-            description: row.get(2)?,
-            repo_org: row.get(3)?,
-            repo_name: row.get(4)?,
-            repo_host: row.get(5)?,
-            created_at: row.get(6)?,
-            updated_at: row.get(7)?,
-            disabled: row.get::<_, Option<String>>(8)?.is_some(),
-            latest_version_number: row.get(9)?,
-            latest_version_at: row.get(10)?,
-            latest_git_branch: row.get(11)?,
-            latest_git_commit_sha: row.get(12)?,
-            latest_git_commit_subject: row.get(13)?,
-            latest_git_dirty: row.get(14)?,
-            version_count: row.get(15)?,
-            public_url: String::new(),
-            raw_url: String::new(),
-        })
-    })?;
-
+    let mut statement = conn.prepare(&format!("{SUMMARY_SELECT} ORDER BY d.updated_at DESC"))?;
+    let rows = statement.query_map([], read_summary)?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
 pub fn get_draft_summary(conn: &Connection, draft_id: &str) -> Result<Option<DraftSummary>> {
-    Ok(list_drafts(conn)?
-        .into_iter()
-        .find(|d| d.draft_id == draft_id))
+    Ok(conn
+        .query_row(
+            &format!("{SUMMARY_SELECT} AND d.id = ?1"),
+            params![draft_id],
+            read_summary,
+        )
+        .optional()?)
 }
 
 pub fn list_versions(conn: &Connection, draft_id: &str) -> Result<Vec<VersionInfo>> {
@@ -551,17 +617,386 @@ pub fn purge_deleted_drafts(conn: &mut Connection) -> Result<(usize, Vec<String>
     Ok((removed, keys))
 }
 
-pub fn disable_draft(conn: &Connection, draft_id: &str, reason: &str) -> Result<bool> {
+#[derive(Debug)]
+pub enum AvailabilityError {
+    DraftNotFound,
+    InvalidWakeTime(String),
+    Other(anyhow::Error),
+}
+
+impl std::fmt::Display for AvailabilityError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AvailabilityError::DraftNotFound => write!(f, "Draft not found."),
+            AvailabilityError::InvalidWakeTime(message) => write!(f, "{message}"),
+            AvailabilityError::Other(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for AvailabilityError {}
+
+impl From<rusqlite::Error> for AvailabilityError {
+    fn from(e: rusqlite::Error) -> Self {
+        AvailabilityError::Other(e.into())
+    }
+}
+
+impl From<anyhow::Error> for AvailabilityError {
+    fn from(e: anyhow::Error) -> Self {
+        AvailabilityError::Other(e)
+    }
+}
+
+/// Accept any RFC 3339 wake time, store it as UTC with milliseconds, and
+/// reject anything that is not strictly in the future.
+pub fn normalize_wake_time(value: &str, now: DateTime<Utc>) -> Result<String, AvailabilityError> {
+    let until = DateTime::parse_from_rfc3339(value.trim())
+        .map_err(|_| {
+            AvailabilityError::InvalidWakeTime(
+                "Wake time must be an RFC 3339 timestamp, e.g. 2026-08-28T08:00:00Z.".into(),
+            )
+        })?
+        .with_timezone(&Utc);
+    if until <= now {
+        return Err(AvailabilityError::InvalidWakeTime(
+            "Wake time must be in the future.".into(),
+        ));
+    }
+    Ok(format_timestamp(until))
+}
+
+pub const DEFAULT_DISABLE_REASON: &str = "Disabled by owner.";
+
+/// The one mutation that changes availability. Each state clears the fields
+/// of the others, so a row is never both snoozed and disabled, and every
+/// manual transition bumps `updated_at`. Returns the updated summary.
+pub fn set_availability(
+    conn: &mut Connection,
+    draft_id: &str,
+    update: &AvailabilityUpdate,
+) -> Result<DraftSummary, AvailabilityError> {
+    let tx = conn.transaction()?;
     let timestamp = now();
-    let changed = conn.execute(
+
+    let previous: Option<(bool, String)> = tx
+        .query_row(
+            "SELECT disabled_at IS NOT NULL, title FROM drafts WHERE id = ?1 AND deleted_at IS NULL",
+            params![draft_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((was_disabled, title)) = previous else {
+        return Err(AvailabilityError::DraftNotFound);
+    };
+
+    match update {
+        AvailabilityUpdate::Active => {
+            tx.execute(
+                r#"
+                UPDATE drafts
+                SET disabled_at = NULL, disabled_reason = NULL, snoozed_until = NULL, updated_at = ?1
+                WHERE id = ?2
+                "#,
+                params![timestamp, draft_id],
+            )?;
+        }
+        AvailabilityUpdate::Snoozed { until } => {
+            let until = normalize_wake_time(until, Utc::now())?;
+            tx.execute(
+                r#"
+                UPDATE drafts
+                SET disabled_at = NULL, disabled_reason = NULL, snoozed_until = ?1, updated_at = ?2
+                WHERE id = ?3
+                "#,
+                params![until, timestamp, draft_id],
+            )?;
+        }
+        AvailabilityUpdate::Disabled { reason } => {
+            let reason = reason.as_deref().unwrap_or(DEFAULT_DISABLE_REASON);
+            tx.execute(
+                r#"
+                UPDATE drafts
+                SET disabled_at = ?1, disabled_reason = ?2, snoozed_until = NULL, updated_at = ?1
+                WHERE id = ?3
+                "#,
+                params![timestamp, reason, draft_id],
+            )?;
+        }
+    }
+
+    // Only a change of serving state is activity: snoozing and unsnoozing
+    // are the owner's own attention management.
+    let event = match update {
+        AvailabilityUpdate::Disabled { .. } if !was_disabled => {
+            Some(NotificationEvent::disabled(draft_id, &title, &timestamp))
+        }
+        AvailabilityUpdate::Active if was_disabled => {
+            Some(NotificationEvent::enabled(draft_id, &title, &timestamp))
+        }
+        _ => None,
+    };
+    if let Some(event) = event {
+        record_event(&tx, &event)?;
+    }
+
+    let summary = get_draft_summary(&tx, draft_id)?.ok_or(AvailabilityError::DraftNotFound)?;
+    tx.commit()?;
+    Ok(summary)
+}
+
+// --- notifications -----------------------------------------------------------
+// Events and their per-subscription deliveries form the outbox that the
+// dispatcher in notifications.rs drains.
+
+/// Store an event and queue one delivery per subscription that opted in to
+/// its kind, inside the caller's transaction. Idempotent by key: a repeated
+/// key (for example a wake recomputed after a restart) changes nothing and
+/// returns false.
+pub fn record_event(conn: &Connection, event: &NotificationEvent) -> rusqlite::Result<bool> {
+    let inserted = conn.execute(
         r#"
-        UPDATE drafts
-        SET disabled_at = ?1, disabled_reason = ?2, updated_at = ?1
-        WHERE id = ?3 AND deleted_at IS NULL
+        INSERT OR IGNORE INTO notification_events (key, kind, draft_id, title, body, target, created_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
         "#,
-        params![timestamp, reason, draft_id],
+        params![
+            event.key,
+            event.kind.as_str(),
+            event.draft_id,
+            event.title,
+            event.body,
+            event.target,
+            event.created_at
+        ],
     )?;
-    Ok(changed > 0)
+    if inserted == 0 {
+        return Ok(false);
+    }
+    conn.execute(
+        r#"
+        INSERT INTO notification_deliveries (event_key, subscription_id, attempts, next_attempt_at)
+        SELECT ?1, id, 0, ?2 FROM push_subscriptions WHERE events LIKE ?3
+        "#,
+        params![
+            event.key,
+            event.created_at,
+            format!("%\"{}\"%", event.kind.as_str())
+        ],
+    )?;
+    Ok(true)
+}
+
+fn read_subscription(row: &rusqlite::Row<'_>) -> rusqlite::Result<PushSubscriptionSummary> {
+    let events: String = row.get(2)?;
+    Ok(PushSubscriptionSummary {
+        id: row.get(0)?,
+        endpoint: row.get(1)?,
+        events: serde_json::from_str(&events).unwrap_or_default(),
+        updated_at: row.get(3)?,
+    })
+}
+
+pub fn get_push_subscription(
+    conn: &Connection,
+    endpoint: &str,
+) -> Result<Option<PushSubscriptionSummary>> {
+    Ok(conn
+        .query_row(
+            "SELECT id, endpoint, events, updated_at FROM push_subscriptions WHERE endpoint = ?1",
+            params![endpoint],
+            read_subscription,
+        )
+        .optional()?)
+}
+
+/// Insert or refresh a browser subscription by endpoint. Keys are always
+/// replaced; preferences change only when the caller sends them.
+pub fn upsert_push_subscription(
+    conn: &Connection,
+    input: &PushSubscriptionInput,
+) -> Result<PushSubscriptionSummary> {
+    let timestamp = now();
+    let events = input
+        .events
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()?;
+    let everything = serde_json::to_string(&NotificationKind::ALL)?;
+    conn.execute(
+        r#"
+        INSERT INTO push_subscriptions (id, endpoint, p256dh, auth, events, created_at, updated_at)
+        VALUES (?1, ?2, ?3, ?4, COALESCE(?5, ?6), ?7, ?7)
+        ON CONFLICT(endpoint) DO UPDATE SET
+            p256dh = excluded.p256dh,
+            auth = excluded.auth,
+            events = COALESCE(?5, push_subscriptions.events),
+            updated_at = excluded.updated_at
+        "#,
+        params![
+            new_internal_id(),
+            input.endpoint,
+            input.keys.p256dh,
+            input.keys.auth,
+            events,
+            everything,
+            timestamp
+        ],
+    )?;
+    get_push_subscription(conn, &input.endpoint)?.context("subscription was not stored")
+}
+
+pub fn remove_push_subscription(conn: &Connection, endpoint: &str) -> Result<bool> {
+    let removed = conn.execute(
+        "DELETE FROM push_subscriptions WHERE endpoint = ?1",
+        params![endpoint],
+    )?;
+    Ok(removed > 0)
+}
+
+pub fn remove_push_subscription_by_id(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute("DELETE FROM push_subscriptions WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+/// One event addressed to one subscription, with the keys needed to send it.
+#[derive(Debug, Clone)]
+pub struct PendingDelivery {
+    pub event: NotificationEvent,
+    pub subscription_id: String,
+    pub endpoint: String,
+    pub p256dh: String,
+    pub auth: String,
+    pub attempts: i64,
+}
+
+fn parse_kind(index: usize, value: String) -> rusqlite::Result<NotificationKind> {
+    NotificationKind::parse(&value).ok_or_else(|| {
+        rusqlite::Error::FromSqlConversionFailure(
+            index,
+            rusqlite::types::Type::Text,
+            format!("unknown notification kind {value:?}").into(),
+        )
+    })
+}
+
+/// Deliveries due at `now`, earliest first.
+pub fn due_deliveries(conn: &Connection, now: &str, limit: usize) -> Result<Vec<PendingDelivery>> {
+    let mut statement = conn.prepare(
+        r#"
+        SELECT e.key, e.kind, e.draft_id, e.title, e.body, e.target, e.created_at,
+               s.id, s.endpoint, s.p256dh, s.auth, d.attempts
+        FROM notification_deliveries d
+        JOIN notification_events e ON e.key = d.event_key
+        JOIN push_subscriptions s ON s.id = d.subscription_id
+        WHERE d.next_attempt_at <= ?1
+        ORDER BY d.next_attempt_at
+        LIMIT ?2
+        "#,
+    )?;
+    let rows = statement.query_map(params![now, limit as i64], |row| {
+        Ok(PendingDelivery {
+            event: NotificationEvent {
+                key: row.get(0)?,
+                kind: parse_kind(1, row.get(1)?)?,
+                draft_id: row.get(2)?,
+                title: row.get(3)?,
+                body: row.get(4)?,
+                target: row.get(5)?,
+                created_at: row.get(6)?,
+            },
+            subscription_id: row.get(7)?,
+            endpoint: row.get(8)?,
+            p256dh: row.get(9)?,
+            auth: row.get(10)?,
+            attempts: row.get(11)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+/// The delivery is finished, whether it succeeded or was given up on.
+pub fn delivery_done(conn: &Connection, event_key: &str, subscription_id: &str) -> Result<()> {
+    conn.execute(
+        "DELETE FROM notification_deliveries WHERE event_key = ?1 AND subscription_id = ?2",
+        params![event_key, subscription_id],
+    )?;
+    Ok(())
+}
+
+pub fn delivery_retry(
+    conn: &Connection,
+    event_key: &str,
+    subscription_id: &str,
+    attempts: i64,
+    next_attempt_at: &str,
+) -> Result<()> {
+    conn.execute(
+        r#"
+        UPDATE notification_deliveries SET attempts = ?3, next_attempt_at = ?4
+        WHERE event_key = ?1 AND subscription_id = ?2
+        "#,
+        params![event_key, subscription_id, attempts, next_attempt_at],
+    )?;
+    Ok(())
+}
+
+pub fn next_delivery_at(conn: &Connection) -> Result<Option<String>> {
+    Ok(conn.query_row(
+        "SELECT MIN(next_attempt_at) FROM notification_deliveries",
+        [],
+        |row| row.get(0),
+    )?)
+}
+
+/// Turn every expired snooze that has not woken yet into a Plan woke event.
+/// The wake key carries the snooze timestamp, so this is safe to run on
+/// every pass and after a restart; nothing on the draft row changes.
+pub fn record_due_wakes(conn: &mut Connection, now: &str) -> Result<Vec<NotificationEvent>> {
+    let tx = conn.transaction()?;
+    let due: Vec<(String, String, String)> = tx
+        .prepare(
+            r#"
+            SELECT id, title, snoozed_until FROM drafts
+            WHERE deleted_at IS NULL AND disabled_at IS NULL
+              AND snoozed_until IS NOT NULL AND snoozed_until <= ?1
+              AND NOT EXISTS (
+                  SELECT 1 FROM notification_events e
+                  WHERE e.key = 'woke:' || drafts.id || ':' || drafts.snoozed_until
+              )
+            "#,
+        )?
+        .query_map(params![now], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?
+        .collect::<Result<_, _>>()?;
+    let mut woke = Vec::with_capacity(due.len());
+    for (draft_id, title, snoozed_until) in due {
+        let event = NotificationEvent::woke(&draft_id, &title, &snoozed_until, now);
+        if record_event(&tx, &event)? {
+            woke.push(event);
+        }
+    }
+    tx.commit()?;
+    Ok(woke)
+}
+
+/// The nearest future wake time across live, snoozed drafts.
+pub fn next_wake_at(conn: &Connection, now: &str) -> Result<Option<String>> {
+    Ok(conn.query_row(
+        r#"
+        SELECT MIN(snoozed_until) FROM drafts
+        WHERE deleted_at IS NULL AND disabled_at IS NULL AND snoozed_until > ?1
+        "#,
+        params![now],
+        |row| row.get(0),
+    )?)
+}
+
+#[cfg(test)]
+pub fn test_connection() -> Connection {
+    let conn = Connection::open_in_memory().unwrap();
+    init(&conn).unwrap();
+    conn
 }
 
 #[cfg(test)]
@@ -569,9 +1004,18 @@ mod tests {
     use super::*;
 
     fn test_conn() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        init(&conn).unwrap();
-        conn
+        test_connection()
+    }
+
+    fn event_kinds(conn: &Connection, draft_id: &str) -> Vec<(String, String)> {
+        conn.prepare(
+            "SELECT kind, target FROM notification_events WHERE draft_id = ?1 ORDER BY created_at, kind",
+        )
+        .unwrap()
+        .query_map(params![draft_id], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
     }
 
     fn upload<'a>(
@@ -822,6 +1266,14 @@ mod tests {
         assert!(columns.iter().any(|column| column == "repo_org"));
         assert!(columns.iter().any(|column| column == "repo_name"));
         assert!(columns.iter().any(|column| column == "repo_host"));
+        let draft_columns = table_columns(&conn, "drafts").unwrap();
+        assert!(draft_columns.iter().any(|column| column == "snoozed_until"));
+        let legacy_title: String = conn
+            .query_row("SELECT title FROM drafts WHERE id = 'draft-1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(legacy_title, "Legacy");
 
         let repository = conn
             .query_row(
@@ -858,7 +1310,282 @@ mod tests {
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
         assert_eq!(owner, "new-owner");
-        assert_eq!(schema_version, 1);
+        assert_eq!(schema_version, 2);
+    }
+
+    #[test]
+    fn availability_transitions_are_exclusive_and_validated() {
+        let mut conn = test_conn();
+        let store = crate::storage::test_store();
+        let meta = UploadMetadata::default();
+        let draft_id = record_upload(
+            &mut conn,
+            &store,
+            upload("<title>Test</title>v1", None, &meta),
+        )
+        .unwrap()
+        .draft_id;
+
+        assert!(matches!(
+            set_availability(&mut conn, "missing", &AvailabilityUpdate::Active),
+            Err(AvailabilityError::DraftNotFound)
+        ));
+
+        let snoozed = set_availability(
+            &mut conn,
+            &draft_id,
+            &AvailabilityUpdate::Snoozed {
+                until: "2099-01-01T09:00:00+01:00".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            snoozed.snoozed_until.as_deref(),
+            Some("2099-01-01T08:00:00.000Z")
+        );
+        assert!(!snoozed.disabled);
+        assert!(find_public_version(&conn, &draft_id, None)
+            .unwrap()
+            .is_some());
+        assert!(find_public_version(&conn, &draft_id, Some(1))
+            .unwrap()
+            .is_some());
+
+        for bad in ["2000-01-01T00:00:00Z", "tomorrow", ""] {
+            assert!(matches!(
+                set_availability(
+                    &mut conn,
+                    &draft_id,
+                    &AvailabilityUpdate::Snoozed { until: bad.into() }
+                ),
+                Err(AvailabilityError::InvalidWakeTime(_))
+            ));
+        }
+
+        // A rejected transition leaves the previous state untouched, and a
+        // new version never changes availability.
+        record_upload(
+            &mut conn,
+            &store,
+            upload("<title>Test</title>v2", Some(draft_id.clone()), &meta),
+        )
+        .unwrap();
+        let unchanged = get_draft_summary(&conn, &draft_id).unwrap().unwrap();
+        assert_eq!(
+            unchanged.snoozed_until.as_deref(),
+            Some("2099-01-01T08:00:00.000Z")
+        );
+
+        let disabled = set_availability(
+            &mut conn,
+            &draft_id,
+            &AvailabilityUpdate::Disabled { reason: None },
+        )
+        .unwrap();
+        assert!(disabled.disabled);
+        assert_eq!(disabled.snoozed_until, None);
+        assert!(find_public_version(&conn, &draft_id, None)
+            .unwrap()
+            .is_none());
+
+        let resnoozed = set_availability(
+            &mut conn,
+            &draft_id,
+            &AvailabilityUpdate::Snoozed {
+                until: "2099-06-01T00:00:00Z".into(),
+            },
+        )
+        .unwrap();
+        assert!(!resnoozed.disabled);
+        assert!(resnoozed.snoozed_until.is_some());
+
+        let active = set_availability(&mut conn, &draft_id, &AvailabilityUpdate::Active).unwrap();
+        assert!(!active.disabled);
+        assert_eq!(active.snoozed_until, None);
+        assert!(active.updated_at >= resnoozed.updated_at);
+
+        std::fs::remove_dir_all(store.root()).ok();
+    }
+
+    fn subscription(
+        endpoint: &str,
+        events: Option<Vec<NotificationKind>>,
+    ) -> PushSubscriptionInput {
+        PushSubscriptionInput {
+            endpoint: endpoint.into(),
+            keys: crate::types::PushKeys {
+                p256dh: "BPUBLIC".into(),
+                auth: "AUTH".into(),
+            },
+            events,
+        }
+    }
+
+    #[test]
+    fn uploads_and_serving_changes_record_events_for_opted_in_subscriptions() {
+        let mut conn = test_conn();
+        let store = crate::storage::test_store();
+        let meta = UploadMetadata::default();
+        let everything =
+            upsert_push_subscription(&conn, &subscription("https://push.test/a", None)).unwrap();
+        assert_eq!(everything.events, NotificationKind::ALL.to_vec());
+        let revisions_only = upsert_push_subscription(
+            &conn,
+            &subscription("https://push.test/b", Some(vec![NotificationKind::Revised])),
+        )
+        .unwrap();
+
+        let first = record_upload(
+            &mut conn,
+            &store,
+            upload("<title>Test</title>v1", None, &meta),
+        )
+        .unwrap();
+        let draft_id = first.draft_id.clone();
+        record_upload(
+            &mut conn,
+            &store,
+            upload("<title>Test</title>v2", Some(draft_id.clone()), &meta),
+        )
+        .unwrap();
+        set_availability(
+            &mut conn,
+            &draft_id,
+            &AvailabilityUpdate::Snoozed {
+                until: "2099-01-01T00:00:00Z".into(),
+            },
+        )
+        .unwrap();
+        set_availability(&mut conn, &draft_id, &AvailabilityUpdate::Active).unwrap();
+        set_availability(
+            &mut conn,
+            &draft_id,
+            &AvailabilityUpdate::Disabled { reason: None },
+        )
+        .unwrap();
+        set_availability(
+            &mut conn,
+            &draft_id,
+            &AvailabilityUpdate::Disabled {
+                reason: Some("again".into()),
+            },
+        )
+        .unwrap();
+        set_availability(&mut conn, &draft_id, &AvailabilityUpdate::Active).unwrap();
+
+        let mut kinds = event_kinds(&conn, &draft_id);
+        kinds.sort();
+        assert_eq!(
+            kinds,
+            vec![
+                (
+                    "disabled".to_string(),
+                    format!("/?draft={draft_id}&view=disabled")
+                ),
+                (
+                    "enabled".to_string(),
+                    format!("/?draft={draft_id}&view=active")
+                ),
+                ("published".to_string(), format!("/d/{draft_id}")),
+                ("revised".to_string(), format!("/d/{draft_id}/v/2")),
+            ]
+        );
+
+        let due = due_deliveries(&conn, "2099-01-01T00:00:00.000Z", 50).unwrap();
+        let mut addressed: Vec<(String, String)> = due
+            .iter()
+            .map(|delivery| {
+                (
+                    delivery.subscription_id.clone(),
+                    delivery.event.kind.as_str().to_string(),
+                )
+            })
+            .collect();
+        addressed.sort();
+        let mut expected = vec![
+            (everything.id.clone(), "disabled".to_string()),
+            (everything.id.clone(), "enabled".to_string()),
+            (everything.id.clone(), "published".to_string()),
+            (everything.id.clone(), "revised".to_string()),
+            (revisions_only.id.clone(), "revised".to_string()),
+        ];
+        expected.sort();
+        assert_eq!(addressed, expected);
+
+        // Preferences change only when sent; keys always refresh.
+        let updated =
+            upsert_push_subscription(&conn, &subscription("https://push.test/b", None)).unwrap();
+        assert_eq!(updated.id, revisions_only.id);
+        assert_eq!(updated.events, vec![NotificationKind::Revised]);
+        assert!(remove_push_subscription(&conn, "https://push.test/b").unwrap());
+        assert!(!remove_push_subscription(&conn, "https://push.test/b").unwrap());
+        assert_eq!(
+            due_deliveries(&conn, "2099-01-01T00:00:00.000Z", 50)
+                .unwrap()
+                .len(),
+            4
+        );
+
+        std::fs::remove_dir_all(store.root()).ok();
+    }
+
+    #[test]
+    fn a_due_snooze_wakes_exactly_once_without_touching_the_draft() {
+        let mut conn = test_conn();
+        let store = crate::storage::test_store();
+        let draft_id = record_upload(
+            &mut conn,
+            &store,
+            upload("<title>Test</title>v1", None, &UploadMetadata::default()),
+        )
+        .unwrap()
+        .draft_id;
+        upsert_push_subscription(&conn, &subscription("https://push.test/a", None)).unwrap();
+
+        // Snoozes are validated as future on write, so age one directly.
+        conn.execute(
+            "UPDATE drafts SET snoozed_until = '2026-01-01T09:00:00.000Z' WHERE id = ?1",
+            params![draft_id],
+        )
+        .unwrap();
+        assert_eq!(
+            next_wake_at(&conn, "2026-01-01T08:00:00.000Z")
+                .unwrap()
+                .as_deref(),
+            Some("2026-01-01T09:00:00.000Z")
+        );
+        assert!(record_due_wakes(&mut conn, "2026-01-01T08:59:59.999Z")
+            .unwrap()
+            .is_empty());
+
+        let woke = record_due_wakes(&mut conn, "2026-01-01T09:00:00.000Z").unwrap();
+        assert_eq!(woke.len(), 1);
+        assert_eq!(woke[0].kind, NotificationKind::Woke);
+        assert_eq!(woke[0].target, format!("/d/{draft_id}"));
+        // A later pass, or a restart, finds nothing new to send.
+        assert!(record_due_wakes(&mut conn, "2026-01-02T00:00:00.000Z")
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            next_wake_at(&conn, "2026-01-02T00:00:00.000Z").unwrap(),
+            None
+        );
+        let row = get_draft_summary(&conn, &draft_id).unwrap().unwrap();
+        assert_eq!(
+            row.snoozed_until.as_deref(),
+            Some("2026-01-01T09:00:00.000Z")
+        );
+        assert_eq!(row.availability(), crate::types::Availability::Active);
+        assert_eq!(
+            due_deliveries(&conn, "2099-01-01T00:00:00.000Z", 50)
+                .unwrap()
+                .iter()
+                .filter(|d| d.event.kind == NotificationKind::Woke)
+                .count(),
+            1
+        );
+
+        std::fs::remove_dir_all(store.root()).ok();
     }
 
     #[test]

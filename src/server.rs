@@ -6,21 +6,26 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
+use axum::extract::rejection::JsonRejection;
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use rusqlite::Connection;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::db::{self, NewUpload, UploadError};
+use crate::db::{self, AvailabilityError, NewUpload, UploadError};
+use crate::notifications::{self, PushHub, VapidIdentity};
 use crate::pdf::{render_version_pdf, PdfIdentity};
 use crate::policy::{validate_html, PolicyOptions, DEFAULT_MAX_HTML_BYTES};
 use crate::render::{render_dashboard, render_not_found};
 use crate::storage::BlobStore;
-use crate::types::{DraftDetail, DraftSummary, UploadMetadata, UploadResponse};
+use crate::types::{
+    AvailabilityUpdate, DraftDetail, DraftSummary, PushSubscriptionInput, UploadMetadata,
+    UploadResponse,
+};
 
 #[derive(clap::Args, Debug)]
 pub struct ServeArgs {
@@ -68,6 +73,12 @@ pub struct ServeArgs {
     /// not enough on its own: without this the CSP still blocks execution
     #[arg(long, env = "KERYX_ALLOW_INLINE_SCRIPTS")]
     pub allow_inline_scripts: bool,
+
+    /// Contact push services may use about this server's Web Push traffic,
+    /// e.g. mailto:ops@example.com (default: the HTTPS public base URL,
+    /// otherwise mailto:keryx@localhost)
+    #[arg(long, env = "KERYX_PUSH_CONTACT")]
+    pub push_contact: Option<String>,
 }
 
 impl ServeArgs {
@@ -82,12 +93,13 @@ impl ServeArgs {
 }
 
 struct AppState {
-    db: Mutex<Connection>,
+    db: Arc<Mutex<Connection>>,
     store: BlobStore,
     public_base_url: Option<String>,
     api_key_hash: Option<String>,
     policy: PolicyOptions,
     csp: HeaderValue,
+    push: Arc<PushHub>,
 }
 
 type SharedState = Arc<AppState>;
@@ -106,19 +118,28 @@ pub fn run(args: ServeArgs) -> Result<()> {
     let db_path = args.db.clone().unwrap_or_else(default_db_path);
     let data_dir = args.data_dir.clone().unwrap_or_else(default_state_dir);
     let conn = db::open(&db_path)?;
+    let public_base_url = args
+        .public_base_url
+        .as_deref()
+        .map(|u| u.trim_end_matches('/').to_string());
+    let vapid = VapidIdentity::load_or_create(&data_dir)?;
+    let push_contact = args
+        .push_contact
+        .clone()
+        .unwrap_or_else(|| notifications::default_contact(public_base_url.as_deref()));
 
     let state: SharedState = Arc::new(AppState {
-        db: Mutex::new(conn),
+        db: Arc::new(Mutex::new(conn)),
         store: BlobStore::new(data_dir.clone()),
-        public_base_url: args
-            .public_base_url
-            .as_deref()
-            .map(|u| u.trim_end_matches('/').to_string()),
+        public_base_url,
         api_key_hash: args.api_key.as_deref().map(crate::sha256_hex),
         policy: args.policy(),
         csp: draft_csp(&args.policy()),
+        push: Arc::new(PushHub::new(vapid, push_contact)),
     });
     let blob_root = state.store.root().join("drafts");
+    let dispatcher_db = state.db.clone();
+    let dispatcher_hub = state.push.clone();
 
     let app = build_router(state, args.max_html_bytes);
 
@@ -161,6 +182,12 @@ pub fn run(args: ServeArgs) -> Result<()> {
                 "open (set KERYX_API_KEY to require a key)"
             }
         );
+        println!(
+            "push: VAPID identity {} · contact {}",
+            data_dir.join("vapid.json").display(),
+            dispatcher_hub.contact()
+        );
+        tokio::spawn(notifications::run_dispatcher(dispatcher_db, dispatcher_hub));
         axum::serve(
             listener,
             app.into_make_service_with_connect_info::<SocketAddr>(),
@@ -183,8 +210,18 @@ fn build_router(state: SharedState, max_html_bytes: usize) -> Router {
         .route("/api/drafts/{draft_id}", get(draft_detail))
         .route("/api/drafts/{draft_id}", delete(delete_draft))
         .route("/api/drafts/{draft_id}/pdf", get(publish_pdf))
+        .route("/api/drafts/{draft_id}/availability", put(set_availability))
         .route("/api/drafts/{draft_id}/disable", post(disable_draft))
         .route("/api/purge", post(purge_deleted))
+        .route("/api/push/vapid", get(push_vapid))
+        .route(
+            "/api/push/subscriptions",
+            put(push_subscribe).delete(push_unsubscribe),
+        )
+        .route("/manifest.webmanifest", get(manifest))
+        .route("/sw.js", get(service_worker))
+        .route("/pwa-icon-192.png", get(icon_192))
+        .route("/pwa-icon-512.png", get(icon_512))
         .route("/d/{draft_id}", get(serve_current))
         .route("/d/{draft_id}/raw", get(serve_current))
         .route("/d/{draft_id}/v/{version}", get(serve_version))
@@ -409,6 +446,7 @@ async fn upload(
 
     match outcome {
         Ok(outcome) => {
+            state.push.wake();
             let base = base_url(&state, &headers);
             let response = UploadResponse {
                 public_url: format!("{base}/d/{}", outcome.draft_id),
@@ -638,6 +676,31 @@ fn remove_blobs(state: &AppState, keys: &[String]) {
     }
 }
 
+/// `PUT /api/drafts/:id/availability`: the single transition endpoint for
+/// active, snoozed, and disabled. Responds with the updated draft summary.
+async fn set_availability(
+    State(state): State<SharedState>,
+    Path(draft_id): Path<String>,
+    headers: HeaderMap,
+    body: Result<Json<AvailabilityUpdate>, JsonRejection>,
+) -> Response {
+    if !authorized(&state, &headers) {
+        return unauthorized();
+    }
+    let update = match body {
+        Ok(Json(update)) => update,
+        Err(rejection) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                &format!("Invalid availability update: {}", rejection.body_text()),
+            )
+        }
+    };
+    apply_availability(&state, &headers, &draft_id, update)
+}
+
+/// Compatibility adapter for the original disable route; it routes through
+/// the same mutation as the availability endpoint.
 #[derive(Deserialize, Default)]
 struct DisableBody {
     reason: Option<String>,
@@ -652,17 +715,44 @@ async fn disable_draft(
     if !authorized(&state, &headers) {
         return unauthorized();
     }
-    let reason = body
-        .and_then(|Json(b)| clean_text(b.reason.as_deref(), 255))
-        .unwrap_or_else(|| "Disabled by owner.".to_string());
+    let reason = body.and_then(|Json(b)| b.reason);
+    apply_availability(
+        &state,
+        &headers,
+        &draft_id,
+        AvailabilityUpdate::Disabled { reason },
+    )
+}
+
+fn apply_availability(
+    state: &AppState,
+    headers: &HeaderMap,
+    draft_id: &str,
+    update: AvailabilityUpdate,
+) -> Response {
+    let update = match update {
+        AvailabilityUpdate::Disabled { reason } => AvailabilityUpdate::Disabled {
+            reason: clean_text(reason.as_deref(), 255),
+        },
+        other => other,
+    };
     let result = {
-        let conn = state.db.lock().unwrap();
-        db::disable_draft(&conn, &draft_id, &reason)
+        let mut conn = state.db.lock().unwrap();
+        db::set_availability(&mut conn, draft_id, &update)
     };
     match result {
-        Ok(true) => Json(json!({ "ok": true })).into_response(),
-        Ok(false) => json_error(StatusCode::NOT_FOUND, "Draft not found."),
-        Err(error) => internal_error(error),
+        Ok(mut draft) => {
+            state.push.wake();
+            fill_urls(&mut draft, &base_url(state, headers));
+            Json(json!({ "ok": true, "draft": draft })).into_response()
+        }
+        Err(AvailabilityError::DraftNotFound) => {
+            json_error(StatusCode::NOT_FOUND, "Draft not found.")
+        }
+        Err(AvailabilityError::InvalidWakeTime(message)) => {
+            json_error(StatusCode::BAD_REQUEST, &message)
+        }
+        Err(AvailabilityError::Other(error)) => internal_error(error),
     }
 }
 
@@ -718,6 +808,108 @@ async fn not_found() -> Response {
     (StatusCode::NOT_FOUND, Html(render_not_found())).into_response()
 }
 
+// --- push subscriptions ------------------------------------------------------
+// Same authentication rule as every other mutation: with an API key set the
+// dashboard is read-only, so a protected deployment has no browser path to
+// subscribe until Keryx has browser authentication.
+
+async fn push_vapid(State(state): State<SharedState>, headers: HeaderMap) -> Response {
+    if !authorized(&state, &headers) {
+        return unauthorized();
+    }
+    Json(json!({ "ok": true, "publicKey": state.push.public_key() })).into_response()
+}
+
+async fn push_subscribe(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    body: Result<Json<PushSubscriptionInput>, JsonRejection>,
+) -> Response {
+    if !authorized(&state, &headers) {
+        return unauthorized();
+    }
+    let input = match body {
+        Ok(Json(input)) => input,
+        Err(rejection) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                &format!("Invalid subscription: {}", rejection.body_text()),
+            )
+        }
+    };
+    if let Err(error) = notifications::check_endpoint(&input.endpoint) {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            &format!("Subscription endpoint rejected: {error}."),
+        );
+    }
+    let result = {
+        let conn = state.db.lock().unwrap();
+        db::upsert_push_subscription(&conn, &input)
+    };
+    match result {
+        Ok(subscription) => {
+            Json(json!({ "ok": true, "subscription": subscription })).into_response()
+        }
+        Err(error) => internal_error(error),
+    }
+}
+
+#[derive(Deserialize)]
+struct UnsubscribeBody {
+    endpoint: String,
+}
+
+async fn push_unsubscribe(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    body: Result<Json<UnsubscribeBody>, JsonRejection>,
+) -> Response {
+    if !authorized(&state, &headers) {
+        return unauthorized();
+    }
+    let Ok(Json(body)) = body else {
+        return json_error(StatusCode::BAD_REQUEST, "Endpoint is required.");
+    };
+    let result = {
+        let conn = state.db.lock().unwrap();
+        db::remove_push_subscription(&conn, &body.endpoint)
+    };
+    match result {
+        Ok(removed) => Json(json!({ "ok": true, "removed": removed })).into_response(),
+        Err(error) => internal_error(error),
+    }
+}
+
+// --- installable app assets --------------------------------------------------
+// Served on every deployment; the browser's origin decides whether it will
+// register the worker or offer installation.
+
+const MANIFEST: &str = include_str!("../assets/manifest.webmanifest");
+const SERVICE_WORKER: &str = include_str!("../assets/service-worker.js");
+const ICON_192: &[u8] = include_bytes!("../assets/pwa-icon-192.png");
+const ICON_512: &[u8] = include_bytes!("../assets/pwa-icon-512.png");
+
+fn static_asset(content_type: &'static str, body: impl Into<axum::body::Body>) -> Response {
+    ([(header::CONTENT_TYPE, content_type)], body.into()).into_response()
+}
+
+async fn manifest() -> Response {
+    static_asset("application/manifest+json", MANIFEST)
+}
+
+async fn service_worker() -> Response {
+    static_asset("text/javascript; charset=utf-8", SERVICE_WORKER)
+}
+
+async fn icon_192() -> Response {
+    static_asset("image/png", ICON_192)
+}
+
+async fn icon_512() -> Response {
+    static_asset("image/png", ICON_512)
+}
+
 fn internal_error(error: anyhow::Error) -> Response {
     eprintln!("internal error: {error:#}");
     json_error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error.")
@@ -753,6 +945,24 @@ mod tests {
             has_inline_script: false,
             external_image_hosts: &[],
         }
+    }
+
+    /// A protected server (API key "secret") on a throwaway store.
+    fn test_state() -> SharedState {
+        let store = crate::storage::test_store();
+        let conn = db::open(&store.root().join("test.db")).unwrap();
+        Arc::new(AppState {
+            db: Arc::new(Mutex::new(conn)),
+            store,
+            public_base_url: Some("https://keryx.test".into()),
+            api_key_hash: Some(crate::sha256_hex("secret")),
+            policy: PolicyOptions::default(),
+            csp: draft_csp(&PolicyOptions::default()),
+            push: Arc::new(PushHub::new(
+                VapidIdentity::generate(),
+                "mailto:test@keryx.test".into(),
+            )),
+        })
     }
 
     #[test]
@@ -792,16 +1002,7 @@ mod tests {
 
     #[tokio::test]
     async fn pdf_endpoint_is_authenticated_versioned_and_ephemeral() {
-        let store = crate::storage::test_store();
-        let conn = db::open(&store.root().join("test.db")).unwrap();
-        let state = Arc::new(AppState {
-            db: Mutex::new(conn),
-            store,
-            public_base_url: Some("https://keryx.test".into()),
-            api_key_hash: Some(crate::sha256_hex("secret")),
-            policy: PolicyOptions::default(),
-            csp: draft_csp(&PolicyOptions::default()),
-        });
+        let state = test_state();
         let metadata = UploadMetadata::default();
         let draft_id = {
             let mut conn = state.db.lock().unwrap();
@@ -842,12 +1043,21 @@ mod tests {
             header::AUTHORIZATION,
             HeaderValue::from_static("Bearer secret"),
         );
-        let before: i64 = state
-            .db
-            .lock()
-            .unwrap()
-            .query_row("SELECT COUNT(*) FROM draft_versions", [], |row| row.get(0))
-            .unwrap();
+        // Publishing a PDF creates neither a version nor a notification.
+        let counts = |state: &AppState| -> (i64, i64) {
+            state
+                .db
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT (SELECT COUNT(*) FROM draft_versions), (SELECT COUNT(*) FROM notification_events)",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap()
+        };
+        let before = counts(&state);
+        assert_eq!(before.1, 2);
         let response = publish_pdf(
             State(state.clone()),
             Path(draft_id.clone()),
@@ -879,14 +1089,219 @@ mod tests {
         assert_eq!(explicit.status(), StatusCode::OK);
         assert_eq!(explicit.headers()["x-keryx-draft-version"], "1");
 
-        let after: i64 = state
+        assert_eq!(counts(&state), before);
+        assert!(!contains_pdf(state.store.root()));
+
+        std::fs::remove_dir_all(state.store.root()).ok();
+    }
+
+    #[test]
+    fn pwa_assets_are_installable_and_the_worker_never_intercepts_requests() {
+        let manifest: serde_json::Value = serde_json::from_str(MANIFEST).unwrap();
+        assert_eq!(manifest["name"], "Keryx");
+        assert_eq!(manifest["start_url"], "/");
+        assert_eq!(manifest["scope"], "/");
+        assert_eq!(manifest["display"], "standalone");
+        let sizes: Vec<&str> = manifest["icons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|icon| icon["sizes"].as_str().unwrap())
+            .collect();
+        assert!(sizes.contains(&"192x192"));
+        assert!(sizes.contains(&"512x512"));
+        assert!(ICON_192.starts_with(b"\x89PNG"));
+        assert!(ICON_512.starts_with(b"\x89PNG"));
+
+        assert!(SERVICE_WORKER.contains("addEventListener(\"push\""));
+        assert!(SERVICE_WORKER.contains("addEventListener(\"notificationclick\""));
+        assert!(!SERVICE_WORKER.contains("fetch"));
+        assert!(!SERVICE_WORKER.contains("caches"));
+    }
+
+    async fn json_body(response: Response) -> serde_json::Value {
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[tokio::test]
+    async fn push_subscription_routes_are_authenticated_and_validate_endpoints() {
+        let state = test_state();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer secret"),
+        );
+        let input = |endpoint: &str| {
+            Ok(Json(PushSubscriptionInput {
+                endpoint: endpoint.into(),
+                keys: crate::types::PushKeys {
+                    p256dh: "BPUBLIC".into(),
+                    auth: "AUTH".into(),
+                },
+                events: Some(vec![crate::types::NotificationKind::Woke]),
+            }))
+        };
+
+        let unauthorized = push_vapid(State(state.clone()), HeaderMap::new()).await;
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        let vapid = json_body(push_vapid(State(state.clone()), headers.clone()).await).await;
+        assert_eq!(vapid["publicKey"], state.push.public_key());
+
+        let plain = push_subscribe(
+            State(state.clone()),
+            headers.clone(),
+            input("http://push.example.test/x"),
+        )
+        .await;
+        assert_eq!(plain.status(), StatusCode::BAD_REQUEST);
+
+        let stored = push_subscribe(
+            State(state.clone()),
+            headers.clone(),
+            input("https://push.example.test/x"),
+        )
+        .await;
+        assert_eq!(stored.status(), StatusCode::OK);
+        let body = json_body(stored).await;
+        assert_eq!(body["subscription"]["events"], json!(["woke"]));
+
+        let removed = push_unsubscribe(
+            State(state.clone()),
+            headers,
+            Ok(Json(UnsubscribeBody {
+                endpoint: "https://push.example.test/x".into(),
+            })),
+        )
+        .await;
+        assert_eq!(json_body(removed).await["removed"], true);
+
+        std::fs::remove_dir_all(state.store.root()).ok();
+    }
+
+    #[tokio::test]
+    async fn availability_route_owns_every_transition() {
+        let state = test_state();
+        let metadata = UploadMetadata::default();
+        let draft_id = {
+            let mut conn = state.db.lock().unwrap();
+            db::record_upload(
+                &mut conn,
+                &state.store,
+                upload(
+                    "<!doctype html><title>v1</title><h1>First</h1>",
+                    None,
+                    &metadata,
+                ),
+            )
+            .unwrap()
+            .draft_id
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer secret"),
+        );
+        let snooze = || {
+            Ok(Json(AvailabilityUpdate::Snoozed {
+                until: "2099-01-01T08:00:00Z".into(),
+            }))
+        };
+
+        let unauthorized = set_availability(
+            State(state.clone()),
+            Path(draft_id.clone()),
+            HeaderMap::new(),
+            snooze(),
+        )
+        .await;
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let missing = set_availability(
+            State(state.clone()),
+            Path("missing".into()),
+            headers.clone(),
+            snooze(),
+        )
+        .await;
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+        let past = set_availability(
+            State(state.clone()),
+            Path(draft_id.clone()),
+            headers.clone(),
+            Ok(Json(AvailabilityUpdate::Snoozed {
+                until: "2000-01-01T08:00:00Z".into(),
+            })),
+        )
+        .await;
+        assert_eq!(past.status(), StatusCode::BAD_REQUEST);
+
+        let snoozed = set_availability(
+            State(state.clone()),
+            Path(draft_id.clone()),
+            headers.clone(),
+            snooze(),
+        )
+        .await;
+        assert_eq!(snoozed.status(), StatusCode::OK);
+        let body = json_body(snoozed).await;
+        assert_eq!(body["draft"]["snoozedUntil"], "2099-01-01T08:00:00.000Z");
+        assert_eq!(body["draft"]["disabled"], false);
+        assert_eq!(
+            body["draft"]["publicUrl"],
+            format!("https://keryx.test/d/{draft_id}")
+        );
+        assert_eq!(
+            serve_draft(&state, &draft_id, None).status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            serve_draft(&state, &draft_id, Some(1)).status(),
+            StatusCode::OK
+        );
+
+        let disabled = disable_draft(
+            State(state.clone()),
+            Path(draft_id.clone()),
+            headers.clone(),
+            Some(Json(DisableBody {
+                reason: Some("  Superseded  ".into()),
+            })),
+        )
+        .await;
+        assert_eq!(disabled.status(), StatusCode::OK);
+        let body = json_body(disabled).await;
+        assert_eq!(body["draft"]["disabled"], true);
+        assert!(body["draft"]["snoozedUntil"].is_null());
+        assert_eq!(
+            serve_draft(&state, &draft_id, None).status(),
+            StatusCode::NOT_FOUND
+        );
+        let reason: String = state
             .db
             .lock()
             .unwrap()
-            .query_row("SELECT COUNT(*) FROM draft_versions", [], |row| row.get(0))
+            .query_row(
+                "SELECT disabled_reason FROM drafts WHERE id = ?1",
+                [&draft_id],
+                |row| row.get(0),
+            )
             .unwrap();
-        assert_eq!(after, before);
-        assert!(!contains_pdf(state.store.root()));
+        assert_eq!(reason, "Superseded");
+
+        let enabled = set_availability(
+            State(state.clone()),
+            Path(draft_id.clone()),
+            headers,
+            Ok(Json(AvailabilityUpdate::Active)),
+        )
+        .await;
+        assert_eq!(enabled.status(), StatusCode::OK);
+        assert_eq!(
+            serve_draft(&state, &draft_id, None).status(),
+            StatusCode::OK
+        );
 
         std::fs::remove_dir_all(state.store.root()).ok();
     }

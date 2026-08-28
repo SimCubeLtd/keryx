@@ -16,7 +16,7 @@ use ratatui::Frame;
 
 use crate::cli::time_ago;
 use crate::client::Api;
-use crate::types::{DraftDetail, DraftSummary};
+use crate::types::{Availability, DraftDetail, DraftSummary};
 
 #[derive(Args, Debug)]
 pub struct TuiArgs {
@@ -284,8 +284,10 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &mut App) {
                     time_ago(&draft.updated_at),
                     draft.draft_id
                 );
-                if draft.disabled {
-                    meta.push_str(" · DISABLED");
+                match draft.availability() {
+                    Availability::Disabled => meta.push_str(" · DISABLED"),
+                    Availability::Snoozed => meta.push_str(" · SNOOZED"),
+                    Availability::Active => {}
                 }
                 ListItem::new(vec![
                     Line::from(Span::styled(

@@ -1,6 +1,6 @@
 [package]
 name = "keryx"
-version = "0.4.2"
+version = "0.5.0"
 edition = "2021"
 license = "MIT"
 description = "Keryx (κῆρυξ): a self-hosted herald for agents — publish static HTML drafts via server, CLI, and TUI."
@@ -12,13 +12,13 @@ axum = "0.8"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
-crossterm = "0.28"
+crossterm = "0.29"
 dirs = "6"
 fulgur = "0.40"
 hex = "0.4"
 open = "5"
 rand = "0.9"
-ratatui = "0.29"
+ratatui = "0.30"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 scraper = "0.23"
@@ -26,9 +26,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 tempfile = "3"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
 url = "2"
 usvg = { version = "0.45", default-features = false, features = ["text"] }
+web-push-native = "0.5"
 woff2-patched = "0.4"
 
 [profile.release]
