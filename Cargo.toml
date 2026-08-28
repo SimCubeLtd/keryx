@@ -1,6 +1,6 @@
 [package]
 name = "keryx"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 license = "MIT"
 description = "Keryx (κῆρυξ): a self-hosted herald for agents — publish static HTML drafts via server, CLI, and TUI."
@@ -15,6 +15,7 @@ clap = { version = "4", features = ["derive", "env"] }
 crossterm = "0.29"
 dirs = "6"
 fulgur = "0.40"
+futures-util = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 hex = "0.4"
 open = "5"
 rand = "0.9"

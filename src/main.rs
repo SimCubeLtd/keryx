@@ -6,6 +6,7 @@ mod ids;
 mod notifications;
 mod pdf;
 mod policy;
+mod realtime;
 mod render;
 mod server;
 mod storage;

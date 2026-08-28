@@ -24,6 +24,7 @@ use web_push_native::p256::PublicKey;
 use web_push_native::{Auth, WebPushBuilder};
 
 use crate::db::{self, PendingDelivery};
+use crate::realtime::DashboardUpdates;
 
 const VAPID_FILE: &str = "vapid.json";
 /// Temporary failures are retried with doubling delays; after this many
@@ -373,7 +374,11 @@ fn sleep_until(next: Option<String>) -> Duration {
 /// snoozes, sends every due delivery, then sleeps until something is due or
 /// a handler calls [`PushHub::wake`]. The first pass after a restart picks up
 /// anything that came due while the server was down.
-pub async fn run_dispatcher(db: Arc<Mutex<Connection>>, hub: Arc<PushHub>) {
+pub async fn run_dispatcher(
+    db: Arc<Mutex<Connection>>,
+    hub: Arc<PushHub>,
+    dashboard_updates: DashboardUpdates,
+) {
     // No redirects: an approved endpoint must not be able to forward the
     // request somewhere the endpoint policy would have refused.
     let client = reqwest::Client::builder()
@@ -386,21 +391,30 @@ pub async fn run_dispatcher(db: Arc<Mutex<Connection>>, hub: Arc<PushHub>) {
 
     loop {
         let now = db::now();
-        let due = {
+        let (due, dashboard_changed) = {
             let mut conn = db.lock().unwrap();
-            match db::record_due_wakes(&mut conn, &now) {
+            let dashboard_changed = match db::record_due_wakes(&mut conn, &now) {
                 Ok(woke) => {
+                    let changed = !woke.is_empty();
                     for event in woke {
                         println!("notification: {} · {}", event.title, event.draft_id);
                     }
+                    changed
                 }
-                Err(error) => eprintln!("notifications: recording wakes failed: {error:#}"),
-            }
-            db::due_deliveries(&conn, &now, BATCH).unwrap_or_else(|error| {
+                Err(error) => {
+                    eprintln!("notifications: recording wakes failed: {error:#}");
+                    false
+                }
+            };
+            let due = db::due_deliveries(&conn, &now, BATCH).unwrap_or_else(|error| {
                 eprintln!("notifications: reading deliveries failed: {error:#}");
                 Vec::new()
-            })
+            });
+            (due, dashboard_changed)
         };
+        if dashboard_changed {
+            dashboard_updates.changed();
+        }
         let drained = due.len() < BATCH;
         let mut pending = due.into_iter();
         let mut in_flight = tokio::task::JoinSet::new();

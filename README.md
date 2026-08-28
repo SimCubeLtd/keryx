@@ -36,7 +36,8 @@ rewriting, no consent interstitials — to whoever holds the URL.
 - **Browse** — a server-rendered dashboard at `/` organised by availability
   (Active, Snoozed, Disabled) with search, repository filtering, a
   selected-draft pane, downloads, snooze and disable controls, and prune
-  controls. The dashboard defaults to the system color scheme and supports
+  controls. Open dashboards update when drafts are published, revised, moved,
+  or pruned. The dashboard defaults to the system color scheme and supports
   light and dark overrides. The `keryx list` command and `keryx tui` provide
   terminal interfaces.
 - **Snooze** — `keryx snooze <id> --for 2h` parks a draft until a wake time
@@ -159,6 +160,14 @@ The dashboard opens on Active. `/?draft=<id>&view=snoozed` deep-links to a tab
 and draft. The selected pane offers Snooze (with presets or a custom wake
 time), Unsnooze, Disable, or Enable; with an API key set those controls are
 absent and the authenticated CLI is the management path.
+
+While the dashboard is open, a Server-Sent Events connection reports that its
+current view may be stale. The browser then fetches one server-rendered
+snapshot and reconciles the rows, counts, selected draft, version history, and
+repository filter without reloading the page. The event carries no draft data.
+A reconnect immediately receives the latest revision, so changes made while
+the connection was down are recovered. Protected deployments use the same
+redacted rendering path as the initial dashboard response.
 
 ## Installable app and notifications
 
