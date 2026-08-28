@@ -151,7 +151,10 @@ fn render_row(draft: &DraftSummary, selected: bool, management_enabled: bool) ->
     )
 }
 
-fn render_detail(draft: Option<&DraftSummary>, management_enabled: bool) -> String {
+pub(crate) fn render_dashboard_detail(
+    draft: Option<&DraftSummary>,
+    management_enabled: bool,
+) -> String {
     let Some(draft) = draft else {
         return r#"<aside class="detail empty" id="draft-detail"><div><h2>No drafts yet</h2><p>Publish one with <code>keryx upload ./plan.html</code>.</p></div></aside>"#.to_string();
     };
@@ -255,6 +258,23 @@ fn status_label(availability: Availability) -> &'static str {
     }
 }
 
+pub(crate) fn render_dashboard_rows(
+    drafts: &[DraftSummary],
+    selected_id: Option<&str>,
+    management_enabled: bool,
+) -> String {
+    drafts
+        .iter()
+        .map(|draft| {
+            render_row(
+                draft,
+                Some(draft.draft_id.as_str()) == selected_id,
+                management_enabled,
+            )
+        })
+        .collect()
+}
+
 pub fn render_dashboard(
     drafts: &[DraftSummary],
     _base_url: &str,
@@ -265,16 +285,7 @@ pub fn render_dashboard(
         .iter()
         .find(|draft| draft.availability() == Availability::Active);
     let selected_id = first_active.map(|draft| draft.draft_id.as_str());
-    let rows = drafts
-        .iter()
-        .map(|draft| {
-            render_row(
-                draft,
-                Some(draft.draft_id.as_str()) == selected_id,
-                management_enabled,
-            )
-        })
-        .collect::<String>();
+    let rows = render_dashboard_rows(drafts, selected_id, management_enabled);
     let repositories = if management_enabled {
         drafts
             .iter()
@@ -431,7 +442,7 @@ pub fn render_dashboard(
         management_enabled = management_enabled,
         rows = rows,
         empty_hidden = empty_hidden,
-        detail = render_detail(first_active.or(drafts.first()), management_enabled),
+        detail = render_dashboard_detail(first_active.or(drafts.first()), management_enabled),
     )
 }
 

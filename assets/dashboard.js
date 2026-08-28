@@ -331,6 +331,49 @@
     return rows.find(function (candidate) { return candidate.dataset.draftId === draftId; });
   }
 
+  function bindRow(row) {
+    syncAvailability(row);
+    renderRowTime(row);
+    row.addEventListener("click", function (event) {
+      if (event.target.closest("a, button, details, summary")) return;
+      populateSummary(row);
+      syncUrl();
+    });
+    row.addEventListener("keydown", function (event) {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        populateSummary(row);
+        syncUrl();
+      }
+    });
+    if (managementEnabled) {
+      row.querySelectorAll("[data-action]").forEach(function (button) {
+        button.addEventListener("click", function () { openPruneDialog(button); });
+      });
+    }
+  }
+
+  function syncRepositoryFilter() {
+    if (!repoFilter) return;
+    var selected = repoFilter.value;
+    var repositories = Array.from(new Set(rows
+      .filter(function (row) { return !row.querySelector(".source.missing"); })
+      .map(function (row) { return row.dataset.repository; })))
+      .sort(function (left, right) { return left.localeCompare(right); });
+    repoFilter.replaceChildren();
+    var all = document.createElement("option");
+    all.value = "";
+    all.textContent = "All repositories";
+    repoFilter.append(all);
+    repositories.forEach(function (repository) {
+      var option = document.createElement("option");
+      option.value = repository;
+      option.textContent = repository;
+      repoFilter.append(option);
+    });
+    repoFilter.value = repositories.includes(selected) ? selected : "";
+  }
+
   tabs.forEach(function (tab) {
     tab.addEventListener("click", function () {
       setView(tab.dataset.view);
@@ -347,22 +390,7 @@
     }
   });
 
-  rows.forEach(function (row) {
-    syncAvailability(row);
-    renderRowTime(row);
-    row.addEventListener("click", function (event) {
-      if (event.target.closest("a, button, details, summary")) return;
-      populateSummary(row);
-      syncUrl();
-    });
-    row.addEventListener("keydown", function (event) {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        populateSummary(row);
-        syncUrl();
-      }
-    });
-  });
+  rows.forEach(bindRow);
 
   document.addEventListener("click", function (event) {
     document.querySelectorAll(".row-menu[open], .notify-menu[open]").forEach(function (menu) {
@@ -504,20 +532,27 @@
       });
     });
 
-    document.querySelectorAll("[data-availability-action]").forEach(function (button) {
-      button.addEventListener("click", function () {
-        var row = findRow(selectedId);
-        if (!row) return;
-        var action = button.dataset.availabilityAction;
-        if (action === "snooze") return openSnoozeDialog(row);
-        if (action === "disable") {
-          return setAvailability(row, { state: "disabled" }, function () { return "Draft disabled. Public links now return 404."; });
-        }
-        setAvailability(row, { state: "active" }, function () {
-          return action === "unsnooze" ? "Draft is active again." : "Draft enabled. Public links work again.";
+    var bindDetailActions = function () {
+      document.querySelectorAll("[data-availability-action]").forEach(function (button) {
+        if (button.dataset.bound === "true") return;
+        button.dataset.bound = "true";
+        button.addEventListener("click", function () {
+          var row = findRow(selectedId);
+          if (!row) return;
+          var action = button.dataset.availabilityAction;
+          if (action === "snooze") return openSnoozeDialog(row);
+          if (action === "disable") {
+            return setAvailability(row, { state: "disabled" }, function () { return "Draft disabled. Public links now return 404."; });
+          }
+          setAvailability(row, { state: "active" }, function () {
+            return action === "unsnooze" ? "Draft is active again." : "Draft enabled. Public links work again.";
+          });
         });
       });
-    });
+    };
+    bindDetailActions();
+  } else {
+    var bindDetailActions = function () {};
   }
 
   // --- prune ------------------------------------------------------------
@@ -544,9 +579,6 @@
   }
 
   if (managementEnabled) {
-    document.querySelectorAll("[data-action]").forEach(function (button) {
-      button.addEventListener("click", function () { openPruneDialog(button); });
-    });
     document.getElementById("cancel-action").addEventListener("click", function () { dialog.close(); });
     confirmAction.addEventListener("click", function () {
       if (!pending) return;
@@ -721,6 +753,63 @@
           .catch(function (error) { showToast(error.message, true); });
       });
     });
+  }
+
+  // --- realtime dashboard ----------------------------------------------
+  // The event stream is an invalidation signal, not a second data source.
+  // Each signal fetches one authoritative server-rendered snapshot.
+
+  var refreshInFlight = false;
+  var refreshPending = false;
+
+  function refreshDashboard() {
+    if (refreshInFlight) {
+      refreshPending = true;
+      return;
+    }
+    refreshInFlight = true;
+    var previousSelection = selectedId;
+    var query = selectedId ? "?selected=" + encodeURIComponent(selectedId) : "";
+    fetch("/api/dashboard/snapshot" + query, { headers: { Accept: "application/json" } })
+      .then(function (response) {
+        if (!response.ok) throw new Error("Dashboard snapshot returned HTTP " + response.status);
+        return response.json();
+      })
+      .then(function (snapshot) {
+        if (typeof snapshot.rows !== "string" || typeof snapshot.detail !== "string") {
+          throw new Error("Dashboard snapshot was malformed");
+        }
+        tbody.innerHTML = snapshot.rows;
+        var detail = document.getElementById("draft-detail");
+        detail.outerHTML = snapshot.detail;
+        rows = Array.from(tbody.querySelectorAll(".draft-row"));
+        rows.forEach(bindRow);
+        syncRepositoryFilter();
+        bindDetailActions();
+        applySort();
+
+        var selected = findRow(selectedId);
+        if (selected && selectedId === previousSelection && !selected.hidden) {
+          populateSummary(selected);
+        }
+        syncUrl();
+        scheduleWake();
+      })
+      .catch(function (error) {
+        console.warn("Keryx realtime refresh failed:", error);
+      })
+      .finally(function () {
+        refreshInFlight = false;
+        if (refreshPending) {
+          refreshPending = false;
+          refreshDashboard();
+        }
+      });
+  }
+
+  if ("EventSource" in window) {
+    var dashboardEvents = new EventSource("/api/dashboard/events");
+    dashboardEvents.addEventListener("dashboard", refreshDashboard);
   }
 
   // --- deep links -------------------------------------------------------

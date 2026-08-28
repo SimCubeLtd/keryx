@@ -1,17 +1,21 @@
 //! HTTP server. One optional API key guards mutations, listings, and PDF
 //! publication; draft HTML serving remains public.
 
+use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
+use futures_util::{stream, Stream};
 use rusqlite::Connection;
 use serde::Deserialize;
 use serde_json::json;
@@ -20,11 +24,14 @@ use crate::db::{self, AvailabilityError, NewUpload, UploadError};
 use crate::notifications::{self, PushHub, VapidIdentity};
 use crate::pdf::{render_version_pdf, PdfIdentity};
 use crate::policy::{validate_html, PolicyOptions, DEFAULT_MAX_HTML_BYTES};
-use crate::render::{render_dashboard, render_not_found};
+use crate::realtime::DashboardUpdates;
+use crate::render::{
+    render_dashboard, render_dashboard_detail, render_dashboard_rows, render_not_found,
+};
 use crate::storage::BlobStore;
 use crate::types::{
-    AvailabilityUpdate, DraftDetail, DraftSummary, PushSubscriptionInput, UploadMetadata,
-    UploadResponse,
+    Availability, AvailabilityUpdate, DraftDetail, DraftSummary, PushSubscriptionInput,
+    UploadMetadata, UploadResponse,
 };
 
 #[derive(clap::Args, Debug)]
@@ -100,6 +107,7 @@ struct AppState {
     policy: PolicyOptions,
     csp: HeaderValue,
     push: Arc<PushHub>,
+    dashboard_updates: DashboardUpdates,
 }
 
 type SharedState = Arc<AppState>;
@@ -136,10 +144,12 @@ pub fn run(args: ServeArgs) -> Result<()> {
         policy: args.policy(),
         csp: draft_csp(&args.policy()),
         push: Arc::new(PushHub::new(vapid, push_contact)),
+        dashboard_updates: DashboardUpdates::new(),
     });
     let blob_root = state.store.root().join("drafts");
     let dispatcher_db = state.db.clone();
     let dispatcher_hub = state.push.clone();
+    let dashboard_updates = state.dashboard_updates.clone();
 
     let app = build_router(state, args.max_html_bytes);
 
@@ -187,7 +197,11 @@ pub fn run(args: ServeArgs) -> Result<()> {
             data_dir.join("vapid.json").display(),
             dispatcher_hub.contact()
         );
-        tokio::spawn(notifications::run_dispatcher(dispatcher_db, dispatcher_hub));
+        tokio::spawn(notifications::run_dispatcher(
+            dispatcher_db,
+            dispatcher_hub,
+            dashboard_updates,
+        ));
         axum::serve(
             listener,
             app.into_make_service_with_connect_info::<SocketAddr>(),
@@ -203,6 +217,8 @@ pub fn run(args: ServeArgs) -> Result<()> {
 fn build_router(state: SharedState, max_html_bytes: usize) -> Router {
     Router::new()
         .route("/", get(dashboard))
+        .route("/api/dashboard/events", get(dashboard_events))
+        .route("/api/dashboard/snapshot", get(dashboard_snapshot))
         .route("/healthz", get(healthz))
         .route("/api/me", get(me))
         .route("/api/uploads", post(upload))
@@ -331,24 +347,94 @@ fn fill_urls(draft: &mut DraftSummary, base: &str) {
 
 async fn dashboard(State(state): State<SharedState>, headers: HeaderMap) -> Response {
     let base = base_url(&state, &headers);
-    let drafts = {
-        let conn = state.db.lock().unwrap();
-        db::list_drafts(&conn)
-    };
+    let drafts = dashboard_drafts(&state, &base);
     match drafts {
-        Ok(mut drafts) => {
-            for draft in &mut drafts {
-                fill_urls(draft, &base);
-            }
-            Html(render_dashboard(
-                &drafts,
-                &base,
-                state.api_key_hash.is_none(),
-            ))
-            .into_response()
-        }
+        Ok(drafts) => Html(render_dashboard(
+            &drafts,
+            &base,
+            state.api_key_hash.is_none(),
+        ))
+        .into_response(),
         Err(error) => internal_error(error),
     }
+}
+
+fn dashboard_drafts(state: &AppState, base: &str) -> Result<Vec<DraftSummary>> {
+    let mut drafts = {
+        let conn = state.db.lock().unwrap();
+        db::list_drafts(&conn)?
+    };
+    for draft in &mut drafts {
+        fill_urls(draft, base);
+    }
+    Ok(drafts)
+}
+
+#[derive(Deserialize, Default)]
+struct DashboardSnapshotQuery {
+    selected: Option<String>,
+}
+
+/// Return the server-rendered mutable parts of the dashboard. This route is
+/// public like `/`, but protected deployments still redact management data.
+async fn dashboard_snapshot(
+    State(state): State<SharedState>,
+    Query(query): Query<DashboardSnapshotQuery>,
+    headers: HeaderMap,
+) -> Response {
+    let base = base_url(&state, &headers);
+    let drafts = match dashboard_drafts(&state, &base) {
+        Ok(drafts) => drafts,
+        Err(error) => return internal_error(error),
+    };
+    let selected = query
+        .selected
+        .as_deref()
+        .and_then(|selected| drafts.iter().find(|draft| draft.draft_id == selected))
+        .or_else(|| {
+            drafts
+                .iter()
+                .find(|draft| draft.availability() == Availability::Active)
+        })
+        .or_else(|| drafts.first());
+    let management_enabled = state.api_key_hash.is_none();
+
+    Json(json!({
+        "ok": true,
+        "rows": render_dashboard_rows(
+            &drafts,
+            selected.map(|draft| draft.draft_id.as_str()),
+            management_enabled,
+        ),
+        "detail": render_dashboard_detail(selected, management_enabled),
+    }))
+    .into_response()
+}
+
+/// Stream coalesced invalidations. Each connection immediately receives the
+/// current revision, so EventSource reconnects always trigger a fresh snapshot.
+async fn dashboard_events(
+    State(state): State<SharedState>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let stream = stream::unfold(
+        (state.dashboard_updates.subscribe(), true),
+        |(mut receiver, initial)| async move {
+            if !initial && receiver.changed().await.is_err() {
+                return None;
+            }
+            let revision = *receiver.borrow_and_update();
+            let event = Event::default()
+                .event("dashboard")
+                .id(revision.to_string())
+                .data("refresh");
+            Some((Ok(event), (receiver, false)))
+        },
+    );
+    Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keep-alive"),
+    )
 }
 
 async fn healthz(State(state): State<SharedState>) -> Response {
@@ -447,6 +533,7 @@ async fn upload(
     match outcome {
         Ok(outcome) => {
             state.push.wake();
+            state.dashboard_updates.changed();
             let base = base_url(&state, &headers);
             let response = UploadResponse {
                 public_url: format!("{base}/d/{}", outcome.draft_id),
@@ -629,6 +716,7 @@ async fn delete_draft(
         };
         return match result {
             Ok(Some(keys)) => {
+                state.dashboard_updates.changed();
                 remove_blobs(&state, &keys);
                 Json(json!({ "ok": true, "purged": true })).into_response()
             }
@@ -642,7 +730,10 @@ async fn delete_draft(
         db::soft_delete_draft(&conn, &draft_id)
     };
     match result {
-        Ok(true) => Json(json!({ "ok": true })).into_response(),
+        Ok(true) => {
+            state.dashboard_updates.changed();
+            Json(json!({ "ok": true })).into_response()
+        }
         Ok(false) => json_error(StatusCode::NOT_FOUND, "Draft not found."),
         Err(error) => internal_error(error),
     }
@@ -659,6 +750,9 @@ async fn purge_deleted(State(state): State<SharedState>, headers: HeaderMap) -> 
     };
     match result {
         Ok((count, keys)) => {
+            if count > 0 {
+                state.dashboard_updates.changed();
+            }
             remove_blobs(&state, &keys);
             Json(json!({ "ok": true, "purgedDrafts": count })).into_response()
         }
@@ -743,6 +837,7 @@ fn apply_availability(
     match result {
         Ok(mut draft) => {
             state.push.wake();
+            state.dashboard_updates.changed();
             fill_urls(&mut draft, &base_url(state, headers));
             Json(json!({ "ok": true, "draft": draft })).into_response()
         }
@@ -962,6 +1057,7 @@ mod tests {
                 VapidIdentity::generate(),
                 "mailto:test@keryx.test".into(),
             )),
+            dashboard_updates: DashboardUpdates::new(),
         })
     }
 
@@ -1119,6 +1215,54 @@ mod tests {
         assert!(!SERVICE_WORKER.contains("caches"));
     }
 
+    #[tokio::test]
+    async fn realtime_routes_stream_invalidations_and_keep_protected_snapshots_redacted() {
+        let state = test_state();
+        let metadata = UploadMetadata {
+            repo_org: Some("SimCubeLtd".into()),
+            repo_name: Some("keryx".into()),
+            git_branch: Some("feat/realtime-dashboard".into()),
+            ..UploadMetadata::default()
+        };
+        {
+            let mut conn = state.db.lock().unwrap();
+            db::record_upload(
+                &mut conn,
+                &state.store,
+                upload(
+                    "<!doctype html><title>Realtime</title><h1>Realtime</h1>",
+                    None,
+                    &metadata,
+                ),
+            )
+            .unwrap();
+        }
+
+        let snapshot = dashboard_snapshot(
+            State(state.clone()),
+            Query(DashboardSnapshotQuery::default()),
+            HeaderMap::new(),
+        )
+        .await;
+        assert_eq!(snapshot.status(), StatusCode::OK);
+        let body = json_body(snapshot).await;
+        assert!(body["rows"].as_str().unwrap().contains("Protected"));
+        assert!(!body["rows"].as_str().unwrap().contains("SimCubeLtd"));
+        assert!(!body["detail"]
+            .as_str()
+            .unwrap()
+            .contains("feat/realtime-dashboard"));
+
+        let events = dashboard_events(State(state.clone())).await.into_response();
+        assert_eq!(events.status(), StatusCode::OK);
+        assert_eq!(
+            events.headers()[header::CONTENT_TYPE],
+            HeaderValue::from_static("text/event-stream")
+        );
+
+        std::fs::remove_dir_all(state.store.root()).ok();
+    }
+
     async fn json_body(response: Response) -> serde_json::Value {
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         serde_json::from_slice(&bytes).unwrap()
@@ -1182,6 +1326,7 @@ mod tests {
     #[tokio::test]
     async fn availability_route_owns_every_transition() {
         let state = test_state();
+        let mut dashboard_updates = state.dashboard_updates.subscribe();
         let metadata = UploadMetadata::default();
         let draft_id = {
             let mut conn = state.db.lock().unwrap();
@@ -1236,6 +1381,7 @@ mod tests {
         )
         .await;
         assert_eq!(past.status(), StatusCode::BAD_REQUEST);
+        assert!(!dashboard_updates.has_changed().unwrap());
 
         let snoozed = set_availability(
             State(state.clone()),
@@ -1245,6 +1391,8 @@ mod tests {
         )
         .await;
         assert_eq!(snoozed.status(), StatusCode::OK);
+        assert!(dashboard_updates.has_changed().unwrap());
+        dashboard_updates.borrow_and_update();
         let body = json_body(snoozed).await;
         assert_eq!(body["draft"]["snoozedUntil"], "2099-01-01T08:00:00.000Z");
         assert_eq!(body["draft"]["disabled"], false);
