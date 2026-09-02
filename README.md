@@ -59,6 +59,15 @@ rewriting, no consent interstitials — to whoever holds the URL.
 cargo build --release   # produces target/release/keryx
 ```
 
+The repository pins its Rust nightly in `rust-toolchain.toml`. CI runs
+`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
+`cargo build --all-targets`, `cargo test`, `cargo deny check`, and
+`cargo vet --locked` on that same toolchain.
+
+`.cargo/config.toml` refuses crates.io releases younger than 14 days while
+resolving dependencies. If `cargo update` declines a version you expected,
+wait or pin the previous release.
+
 ## Server
 
 ```sh

@@ -1,0 +1,42 @@
+[advisories]
+yanked = "deny"
+unmaintained = "none"
+ignore = [
+  # web-push-native's VAPID feature selects jwt-simple's pure-rust backend,
+  # which compiles RSA support even though Keryx exclusively signs ES256.
+  { id = "RUSTSEC-2023-0071", reason = "Keryx never constructs or uses an RSA key; the transitive crate is unreachable from its ES256-only VAPID path" },
+  # chacha20 0.10.2 is the first non-yanked compatible release, but it is
+  # deliberately blocked until it clears the repository's 14-day age gate.
+  { crate = "chacha20@0.10.1", reason = "replace with 0.10.2 once it is at least 14 days old" }
+]
+
+[licenses]
+confidence-threshold = 0.8
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "0BSD",
+  "ISC",
+  "Zlib",
+  "BSL-1.0",
+  "Unicode-3.0",
+  "Unlicense",
+  "MPL-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "CDLA-Permissive-2.0"
+]
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
