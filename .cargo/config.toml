@@ -1,0 +1,12 @@
+# Supply-chain hardening: when resolving, refuse registry releases younger
+# than 14 days, so a freshly published (possibly hijacked) version cannot land
+# in Cargo.lock before the ecosystem has had a look at it. This needs the
+# nightly pinned in rust-toolchain.toml; stable Cargo ignores [unstable].
+[unstable]
+min-publish-age = true
+
+[registry]
+global-min-publish-age = "14 days"
+
+[resolver]
+incompatible-publish-age = "deny"

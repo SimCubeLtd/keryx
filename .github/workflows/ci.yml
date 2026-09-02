@@ -1,0 +1,60 @@
+name: CI
+
+# Tests only. Releases are built and published elsewhere; this workflow
+# publishes nothing.
+on:
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (build + lint + test)
+    runs-on: ubuntu-latest
+    env:
+      # Debuginfo roughly doubles target/ and the restored cache, and nothing
+      # here needs symbols.
+      CARGO_PROFILE_DEV_DEBUG: 0
+    steps:
+      - uses: actions/checkout@v4
+
+      # The toolchain comes from rust-toolchain.toml, so CI resolves and builds
+      # exactly as a developer machine does, including min-publish-age.
+      - name: Install the pinned toolchain
+        run: |
+          rustup toolchain install
+          rustup show active-toolchain
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: cargo build
+        run: cargo build --all-targets
+      - name: cargo test
+        run: cargo test
+
+  supply-chain:
+    name: Supply chain (deny + vet)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-vet
+      - name: cargo deny
+        run: cargo deny check
+      - name: cargo vet
+        run: cargo vet --locked
