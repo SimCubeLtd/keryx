@@ -1,12 +1,19 @@
-[package]
-name = "keryx"
+[workspace]
+members = ["."]
+# Plain `cargo test` / `cargo clippy` must cover every crate, not only the
+# root binary, so CI and local habits keep working unchanged.
+default-members = ["."]
+resolver = "2"
+
+[workspace.package]
 version = "0.5.1"
 edition = "2021"
 license = "MIT"
-description = "Keryx (κῆρυξ): a self-hosted herald for agents — publish static HTML drafts via server, CLI, and TUI."
 repository = "https://github.com/SimCubeLtd/keryx"
 
-[dependencies]
+# Every dependency is declared once here, so no crate can drift onto another
+# version or feature set by accident. Crates opt in with `workspace = true`.
+[workspace.dependencies]
 anyhow = "1"
 axum = "0.8"
 base64 = "0.22"
@@ -32,6 +39,41 @@ url = "2"
 usvg = { version = "0.45", default-features = false, features = ["text"] }
 web-push-native = "0.5"
 woff2-patched = "0.4"
+
+[package]
+name = "keryx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Keryx (κῆρυξ): a self-hosted herald for agents — publish static HTML drafts via server, CLI, and TUI."
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+base64.workspace = true
+chrono.workspace = true
+clap.workspace = true
+crossterm.workspace = true
+dirs.workspace = true
+fulgur.workspace = true
+futures-util.workspace = true
+hex.workspace = true
+open.workspace = true
+rand.workspace = true
+ratatui.workspace = true
+reqwest.workspace = true
+rusqlite.workspace = true
+scraper.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+url.workspace = true
+usvg.workspace = true
+web-push-native.workspace = true
+woff2-patched.workspace = true
 
 [profile.release]
 lto = true
