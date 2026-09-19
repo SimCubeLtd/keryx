@@ -2722,14 +2722,17 @@ dependencies = [
  "crossterm",
  "keryx-client",
  "keryx-core",
+ "keryx-db",
  "keryx-policy",
  "keryx-server",
+ "keryx-store",
  "open",
  "ratatui",
  "reqwest",
  "rustls",
  "serde_json",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -2827,6 +2830,7 @@ version = "0.5.1"
 dependencies = [
  "anyhow",
  "async-trait",
+ "futures-util",
  "keryx-core",
  "opendal-core",
  "opendal-http-transport-reqwest",

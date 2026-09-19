@@ -23,6 +23,7 @@ s3 = [
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
+futures-util.workspace = true
 keryx-core.workspace = true
 opendal-core.workspace = true
 opendal-http-transport-reqwest = { workspace = true, optional = true }

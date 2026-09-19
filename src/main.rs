@@ -47,6 +47,11 @@ enum Command {
     },
     /// Browse drafts interactively
     Tui(tui::TuiArgs),
+    /// Offline blob store maintenance: migrate between stores, collect orphans
+    Storage {
+        #[command(subcommand)]
+        command: cli::StorageCommand,
+    },
 }
 
 fn main() {
@@ -71,6 +76,7 @@ fn main() {
         Command::Purge(args) => cli::purge(args),
         Command::Auth { command } => cli::auth(command),
         Command::Tui(args) => tui::run(args),
+        Command::Storage { command } => cli::storage(command),
     };
 
     if let Err(error) = result {

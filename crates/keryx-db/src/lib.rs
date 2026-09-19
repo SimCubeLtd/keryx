@@ -400,6 +400,30 @@ pub fn record_upload(
     })
 }
 
+/// One version's blob as recorded: what `storage migrate` verifies against
+/// and what `storage gc` treats as owned.
+pub struct BlobRecord {
+    pub object_key: String,
+    pub content_hash: String,
+    pub file_size: i64,
+}
+
+/// Every blob any version row points at, including versions of soft-deleted
+/// and disabled drafts: those rows still own their objects.
+pub fn blob_records(conn: &Connection) -> Result<Vec<BlobRecord>> {
+    let mut statement = conn.prepare(
+        "SELECT object_key, content_hash, file_size FROM draft_versions ORDER BY object_key",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok(BlobRecord {
+            object_key: row.get(0)?,
+            content_hash: row.get(1)?,
+            file_size: row.get(2)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
 pub struct ServedVersion {
     pub draft_id: String,
     pub version_number: i64,

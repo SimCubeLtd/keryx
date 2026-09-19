@@ -44,6 +44,60 @@ pub enum StorageKind {
     S3,
 }
 
+/// The S3 flags, shared by `serve` and the offline `storage` commands so one
+/// set of environment variables configures all of them.
+#[derive(clap::Args, Debug, Clone)]
+pub struct S3Args {
+    /// S3 bucket; required when --storage is s3. Credentials never come from
+    /// Keryx flags: they resolve through the standard AWS chain
+    #[arg(long, env = "KERYX_S3_BUCKET")]
+    pub s3_bucket: Option<String>,
+
+    /// S3 region, or the placeholder most S3-compatible endpoints accept
+    #[arg(long, env = "KERYX_S3_REGION", default_value = "us-east-1")]
+    pub s3_region: String,
+
+    /// Custom S3 endpoint for RustFS, MinIO, Ceph RGW, R2 or B2
+    /// (default: AWS_ENDPOINT_URL_S3, then AWS)
+    #[arg(long, env = "KERYX_S3_ENDPOINT")]
+    pub s3_endpoint: Option<String>,
+
+    /// Key prefix inside the bucket
+    #[arg(long, env = "KERYX_S3_PREFIX", default_value = "")]
+    pub s3_prefix: String,
+
+    /// Named AWS profile for credential lookup
+    #[arg(long, env = "KERYX_S3_PROFILE")]
+    pub s3_profile: Option<String>,
+}
+
+impl S3Args {
+    /// The blob backend a storage kind selects. `data_dir` roots the disk
+    /// backend.
+    pub fn backend_config(
+        &self,
+        kind: StorageKind,
+        data_dir: &std::path::Path,
+    ) -> Result<BackendConfig> {
+        Ok(match kind {
+            StorageKind::Disk => BackendConfig::Disk(DiskConfig {
+                data_dir: data_dir.to_path_buf(),
+            }),
+            StorageKind::S3 => BackendConfig::S3(S3Config {
+                bucket: self
+                    .s3_bucket
+                    .clone()
+                    .filter(|bucket| !bucket.trim().is_empty())
+                    .context("s3 storage needs --s3-bucket (or KERYX_S3_BUCKET)")?,
+                region: self.s3_region.clone(),
+                endpoint: self.s3_endpoint.clone(),
+                prefix: self.s3_prefix.clone(),
+                profile: self.s3_profile.clone(),
+            }),
+        })
+    }
+}
+
 #[derive(clap::Args, Debug)]
 pub struct ServeArgs {
     /// Port to listen on
@@ -68,27 +122,8 @@ pub struct ServeArgs {
     #[arg(long, env = "KERYX_STORAGE", value_enum, default_value_t = StorageKind::Disk)]
     pub storage: StorageKind,
 
-    /// S3 bucket; required when --storage is s3. Credentials never come from
-    /// Keryx flags: they resolve through the standard AWS chain
-    #[arg(long, env = "KERYX_S3_BUCKET")]
-    pub s3_bucket: Option<String>,
-
-    /// S3 region, or the placeholder most S3-compatible endpoints accept
-    #[arg(long, env = "KERYX_S3_REGION", default_value = "us-east-1")]
-    pub s3_region: String,
-
-    /// Custom S3 endpoint for RustFS, MinIO, Ceph RGW, R2 or B2
-    /// (default: AWS_ENDPOINT_URL_S3, then AWS)
-    #[arg(long, env = "KERYX_S3_ENDPOINT")]
-    pub s3_endpoint: Option<String>,
-
-    /// Key prefix inside the bucket
-    #[arg(long, env = "KERYX_S3_PREFIX", default_value = "")]
-    pub s3_prefix: String,
-
-    /// Named AWS profile for credential lookup
-    #[arg(long, env = "KERYX_S3_PROFILE")]
-    pub s3_profile: Option<String>,
+    #[command(flatten)]
+    pub s3: S3Args,
 
     /// Base URL used in returned links, e.g. http://myhost:7812
     /// (default: derived from each request's Host header)
@@ -127,26 +162,6 @@ pub struct ServeArgs {
 }
 
 impl ServeArgs {
-    /// The blob backend these flags select.
-    fn backend_config(&self, data_dir: &std::path::Path) -> Result<BackendConfig> {
-        Ok(match self.storage {
-            StorageKind::Disk => BackendConfig::Disk(DiskConfig {
-                data_dir: data_dir.to_path_buf(),
-            }),
-            StorageKind::S3 => BackendConfig::S3(S3Config {
-                bucket: self
-                    .s3_bucket
-                    .clone()
-                    .filter(|bucket| !bucket.trim().is_empty())
-                    .context("--storage s3 needs --s3-bucket (or KERYX_S3_BUCKET)")?,
-                region: self.s3_region.clone(),
-                endpoint: self.s3_endpoint.clone(),
-                prefix: self.s3_prefix.clone(),
-                profile: self.s3_profile.clone(),
-            }),
-        })
-    }
-
     fn policy(&self) -> PolicyOptions {
         PolicyOptions {
             max_html_bytes: self.max_html_bytes,
@@ -170,7 +185,7 @@ struct AppState {
 
 type SharedState = Arc<AppState>;
 
-fn default_state_dir() -> PathBuf {
+pub fn default_state_dir() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".keryx")
@@ -194,7 +209,7 @@ pub fn run(args: ServeArgs) -> Result<()> {
         .clone()
         .unwrap_or_else(|| notifications::default_contact(public_base_url.as_deref()));
 
-    let backend_config = args.backend_config(&data_dir)?;
+    let backend_config = args.s3.backend_config(args.storage, &data_dir)?;
     let api_key_hash = args.api_key.as_deref().map(keryx_core::sha256_hex);
     let policy = args.policy();
 

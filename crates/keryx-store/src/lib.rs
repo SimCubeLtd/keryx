@@ -3,6 +3,7 @@
 //! local disk by default or in any S3-compatible store.
 
 mod backend;
+mod maintenance;
 #[cfg(feature = "s3")]
 mod s3;
 
@@ -12,3 +13,4 @@ pub use backend::{
     create_backend, object_key, BackendConfig, BlobBackend, BlobEntry, DiskConfig, OpenDalBackend,
     S3Config,
 };
+pub use maintenance::{gc, migrate, BlobRef, GcReport, MigrateOptions, MigrateReport, GC_GRACE};

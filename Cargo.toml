@@ -77,8 +77,10 @@ s3 = ["keryx-server/s3"]
 [dependencies]
 keryx-client.workspace = true
 keryx-core.workspace = true
+keryx-db.workspace = true
 keryx-policy.workspace = true
 keryx-server.workspace = true
+keryx-store.workspace = true
 
 anyhow.workspace = true
 chrono.workspace = true
@@ -88,6 +90,7 @@ open.workspace = true
 ratatui.workspace = true
 rustls.workspace = true
 serde_json.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 reqwest.workspace = true
