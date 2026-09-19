@@ -8,7 +8,7 @@ repository.workspace = true
 publish = false
 
 [features]
-# Exposes test_connection() to the test suites of dependent crates.
+# Exposes the in-memory store and row peeking to dependent crates' tests.
 test-support = []
 
 [dependencies]
@@ -16,7 +16,6 @@ anyhow.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
 keryx-core.workspace = true
-rusqlite.workspace = true
 sea-orm.workspace = true
 sea-orm-migration.workspace = true
 serde_json.workspace = true

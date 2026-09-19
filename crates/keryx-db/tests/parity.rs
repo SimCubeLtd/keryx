@@ -6,10 +6,10 @@
 //! Level 1, schema: an adopted database has the same columns and indexes as
 //! one the migrator builds from empty.
 //! Level 2, data: adoption leaves every row exactly as the old rusqlite
-//! upgrade path would have, and the old query layer reads the same answers
-//! from both. Those answers are pinned in a golden file, so they outlive the
-//! old code, and the SeaORM store must give the same answers through
-//! DraftStore.
+//! upgrade path did, and the store answers through DraftStore exactly what
+//! the old query layer answered. Both are judged against golden files that
+//! the old code generated before it was deleted. Never re-bless them to make
+//! a failure go away: they are the record of what existing users have.
 //!
 //! Level 3, end to end through the real binary, is tests/legacy_database.rs
 //! in the workspace root.
@@ -109,35 +109,8 @@ async fn all_rows(db: &DatabaseConnection) -> BTreeMap<String, Vec<String>> {
     dump
 }
 
-/// What the old rusqlite query layer answers: the listing, and each draft's
-/// summary and versions, serialised as the API serialises them.
-fn old_query_layer_answers(path: &Path) -> serde_json::Value {
-    let conn = keryx_db::open(path).unwrap();
-    let ids: Vec<String> = {
-        let mut statement = conn.prepare("SELECT id FROM drafts ORDER BY id").unwrap();
-        let ids = statement.query_map([], |row| row.get(0)).unwrap();
-        ids.collect::<Result<_, _>>().unwrap()
-    };
-    let details: BTreeMap<String, serde_json::Value> = ids
-        .iter()
-        .map(|id| {
-            (
-                id.clone(),
-                serde_json::json!({
-                    "summary": keryx_db::get_draft_summary(&conn, id).unwrap(),
-                    "versions": keryx_db::list_versions(&conn, id).unwrap(),
-                }),
-            )
-        })
-        .collect();
-    serde_json::json!({
-        "listing": keryx_db::list_drafts(&conn).unwrap(),
-        "drafts": details,
-        "blobs": keryx_db::blob_records(&conn).unwrap().iter().map(|b| (b.object_key.clone(), b.content_hash.clone(), b.file_size)).collect::<Vec<_>>(),
-    })
-}
-
-/// The same questions, asked of the SeaORM store.
+/// The listing, and each draft's summary and versions, serialised as the API
+/// serialises them.
 async fn store_answers(path: &Path) -> serde_json::Value {
     use keryx_db::DraftStore;
     let ids = {
@@ -187,16 +160,9 @@ async fn fresh_shape(dir: &Path) -> BTreeMap<String, Vec<String>> {
 }
 
 async fn assert_parity(name: &str, legacy: &Path, dir: &Path) {
-    // The same legacy file twice: once for each upgrade path.
-    let old_way = dir.join(format!("{name}-old-way.db"));
-    let new_way = dir.join(format!("{name}-new-way.db"));
-    std::fs::copy(legacy, &old_way).unwrap();
-    std::fs::copy(legacy, &new_way).unwrap();
-
-    // Old way: rusqlite's open() runs init() and its upgrade steps.
-    drop(keryx_db::open(&old_way).unwrap());
-    // New way: adoption.
-    let (adopted, _) = open_sqlite(&new_way, false).await.unwrap();
+    let database = dir.join(format!("{name}.db"));
+    std::fs::copy(legacy, &database).unwrap();
+    let (adopted, _) = open_sqlite(&database, false).await.unwrap();
 
     // Level 1: the adopted schema is the schema the migrator builds.
     assert_eq!(
@@ -205,36 +171,16 @@ async fn assert_parity(name: &str, legacy: &Path, dir: &Path) {
         "{name}: schema"
     );
 
-    // Level 2: every row is exactly what the old upgrade path produced...
-    let old_db = keryx_db::connect::connect_sqlite(&old_way).await.unwrap();
-    assert_eq!(
-        all_rows(&adopted).await,
-        all_rows(&old_db).await,
-        "{name}: rows"
-    );
-    // ...and that old outcome is pinned too, so this holds once rusqlite is gone.
+    // Level 2: every row is exactly what the old rusqlite upgrade path
+    // produced from the same file...
     golden(
         &format!("{name}.rows"),
-        &serde_json::to_value(all_rows(&old_db).await).unwrap(),
+        &serde_json::to_value(all_rows(&adopted).await).unwrap(),
     );
     adopted.close().await.unwrap();
-    old_db.close().await.unwrap();
 
-    // ...and the old query layer answers identically from both, as pinned.
-    let answers = old_query_layer_answers(&new_way);
-    assert_eq!(
-        answers,
-        old_query_layer_answers(&old_way),
-        "{name}: answers"
-    );
-    golden(name, &answers);
-
-    // And the SeaORM store, reading the adopted database, says the same.
-    assert_eq!(
-        store_answers(&new_way).await,
-        answers,
-        "{name}: DraftStore answers"
-    );
+    // ...and the store answers exactly what the old query layer answered.
+    golden(name, &store_answers(&database).await);
 }
 
 #[tokio::test]
