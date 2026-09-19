@@ -3,6 +3,7 @@
 //! object key.
 
 pub mod connect;
+pub mod entity;
 pub mod migration;
 
 use std::path::Path;
