@@ -69,6 +69,9 @@ S3 storage and OCI sharing are default Cargo features (`s3`, `share`).
 `cargo build --release --no-default-features` gives a lean binary with
 neither.
 
+[`supply-chain/README.md`](supply-chain/README.md) explains how dependencies
+are vetted and which ones are knowingly unreviewed.
+
 `.cargo/config.toml` refuses crates.io releases younger than 14 days while
 resolving dependencies. If `cargo update` declines a version you expected,
 wait or pin the previous release.
