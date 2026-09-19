@@ -16,4 +16,6 @@ anyhow.workspace = true
 chrono.workspace = true
 keryx-core.workspace = true
 rusqlite.workspace = true
+sea-orm.workspace = true
+sea-orm-migration.workspace = true
 serde_json.workspace = true
