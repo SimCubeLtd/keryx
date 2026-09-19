@@ -1,0 +1,18 @@
+{
+  "draft_versions": [
+    "cli_version='0.5.1' content_hash='1c9f4db98073d581a5f50abc7bcb6dec80230bab87221c2938d17bf275f87f6f' created_at='2026-09-19T18:05:59.867Z' draft_id='w5s7hqmozxa6' external_image_hosts='[]' file_size=90 git_branch=NULL git_commit_sha=NULL git_commit_subject=NULL git_dirty=NULL has_inline_script=0 id='P8bLhVEEl4NCY28fvZ4G' object_key='drafts/w5s7hqmozxa6/P8bLhVEEl4NCY28fvZ4G.html' original_filename='two.html' repo_host=NULL repo_name=NULL repo_org=NULL source_ip='127.0.0.1' user_agent='keryx/0.5.1' version_number=1",
+    "cli_version='0.5.1' content_hash='84c35bb84eaa5c0484ebbc20271bafb61a9c3ccc32872512671af6426a6b5426' created_at='2026-09-19T18:05:59.837Z' draft_id='g3q1hbw3lw0c' external_image_hosts='[]' file_size=98 git_branch=NULL git_commit_sha=NULL git_commit_subject=NULL git_dirty=NULL has_inline_script=0 id='9zuAQ57ES2EZjlq4dx2o' object_key='drafts/g3q1hbw3lw0c/9zuAQ57ES2EZjlq4dx2o.html' original_filename='one-v2.html' repo_host=NULL repo_name=NULL repo_org=NULL source_ip='127.0.0.1' user_agent='keryx/0.5.1' version_number=2",
+    "cli_version='0.5.1' content_hash='bb7be5e9764db8cb44fccdd94bbc37e4b49a26c9ae02bb1db6685530532aac5c' created_at='2026-09-19T18:05:59.804Z' draft_id='g3q1hbw3lw0c' external_image_hosts='[]' file_size=108 git_branch=NULL git_commit_sha=NULL git_commit_subject=NULL git_dirty=NULL has_inline_script=0 id='MrTRWmNpwE89zhqPe1pv' object_key='drafts/g3q1hbw3lw0c/MrTRWmNpwE89zhqPe1pv.html' original_filename='one.html' repo_host=NULL repo_name=NULL repo_org=NULL source_ip='127.0.0.1' user_agent='keryx/0.5.1' version_number=1"
+  ],
+  "drafts": [
+    "created_at='2026-09-19T18:05:59.804Z' current_version_id='9zuAQ57ES2EZjlq4dx2o' deleted_at=NULL description=NULL disabled_at=NULL disabled_reason=NULL id='g3q1hbw3lw0c' repo_host=NULL repo_name=NULL repo_org=NULL snoozed_until=NULL title='Plan one' updated_at='2026-09-19T18:05:59.837Z'",
+    "created_at='2026-09-19T18:05:59.867Z' current_version_id='P8bLhVEEl4NCY28fvZ4G' deleted_at=NULL description=NULL disabled_at=NULL disabled_reason=NULL id='w5s7hqmozxa6' repo_host=NULL repo_name=NULL repo_org=NULL snoozed_until=NULL title='Plan two' updated_at='2026-09-19T18:05:59.867Z'"
+  ],
+  "notification_deliveries": [],
+  "notification_events": [
+    "body='Plan one · v2' created_at='2026-09-19T18:05:59.837Z' draft_id='g3q1hbw3lw0c' key='revised:g3q1hbw3lw0c:9zuAQ57ES2EZjlq4dx2o' kind='revised' target='/d/g3q1hbw3lw0c/v/2' title='Plan revised'",
+    "body='Plan one' created_at='2026-09-19T18:05:59.804Z' draft_id='g3q1hbw3lw0c' key='published:g3q1hbw3lw0c:MrTRWmNpwE89zhqPe1pv' kind='published' target='/d/g3q1hbw3lw0c' title='Plan published'",
+    "body='Plan two' created_at='2026-09-19T18:05:59.867Z' draft_id='w5s7hqmozxa6' key='published:w5s7hqmozxa6:P8bLhVEEl4NCY28fvZ4G' kind='published' target='/d/w5s7hqmozxa6' title='Plan published'"
+  ],
+  "push_subscriptions": []
+}

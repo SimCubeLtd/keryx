@@ -212,6 +212,11 @@ async fn assert_parity(name: &str, legacy: &Path, dir: &Path) {
         all_rows(&old_db).await,
         "{name}: rows"
     );
+    // ...and that old outcome is pinned too, so this holds once rusqlite is gone.
+    golden(
+        &format!("{name}.rows"),
+        &serde_json::to_value(all_rows(&old_db).await).unwrap(),
+    );
     adopted.close().await.unwrap();
     old_db.close().await.unwrap();
 
