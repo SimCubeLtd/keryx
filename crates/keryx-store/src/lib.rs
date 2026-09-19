@@ -2,9 +2,20 @@
 //! the documents themselves live as plain files under the data directory,
 //! keeping the database small and the bytes easy to inspect or back up.
 
+mod backend;
+#[cfg(feature = "s3")]
+mod s3;
+
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+
+#[cfg(any(test, feature = "test-support"))]
+pub use backend::memory_backend;
+pub use backend::{
+    create_backend, object_key, BackendConfig, BlobBackend, BlobEntry, DiskConfig, OpenDalBackend,
+    S3Config,
+};
 
 pub struct BlobStore {
     root: PathBuf,
@@ -22,7 +33,7 @@ impl BlobStore {
     /// Keys are built from internally generated alphanumeric ids only, so
     /// they are always safe relative paths.
     pub fn object_key(draft_id: &str, version_id: &str) -> String {
-        format!("drafts/{draft_id}/{version_id}.html")
+        object_key(draft_id, version_id)
     }
 
     fn path_for(&self, key: &str) -> PathBuf {
@@ -84,28 +95,5 @@ mod tests {
         store.put(&key, "<p>hello</p>").unwrap();
         assert_eq!(store.get(&key).unwrap(), "<p>hello</p>");
         std::fs::remove_dir_all(store.root()).ok();
-    }
-
-    /// Proves the pinned OpenDAL stack compiles and links with ring as the
-    /// only TLS provider, before any storage logic depends on it.
-    #[cfg(feature = "s3")]
-    #[test]
-    fn opendal_s3_and_fs_operators_build() {
-        use opendal_core::{HttpTransporter, OperationContext, Operator};
-        use opendal_http_transport_reqwest::ReqwestTransport;
-
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        let client = reqwest::Client::builder().build().unwrap();
-        let context = OperationContext::new()
-            .with_http_transport(HttpTransporter::new(ReqwestTransport::new(client)));
-        let s3 = opendal_service_s3::S3::default()
-            .bucket("keryx-link-proof")
-            .region("us-east-1");
-        let operator = Operator::new(s3).unwrap().with_context(context);
-        assert_eq!(operator.info().scheme().to_string(), "s3");
-
-        let root = std::env::temp_dir().join("keryx-tests");
-        let fs = opendal_service_fs::Fs::default().root(root.to_str().unwrap());
-        assert_eq!(Operator::new(fs).unwrap().info().scheme().to_string(), "fs");
     }
 }
