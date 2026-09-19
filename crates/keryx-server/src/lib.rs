@@ -7,7 +7,7 @@ mod realtime;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -19,7 +19,6 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use futures_util::{stream, Stream};
-use rusqlite::Connection;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -30,7 +29,7 @@ use keryx_core::types::{
     Availability, AvailabilityUpdate, DraftDetail, DraftSummary, PushSubscriptionInput,
     UploadMetadata, UploadResponse,
 };
-use keryx_db::{self as db, AvailabilityError, NewUpload, UploadError};
+use keryx_db::{AvailabilityError, DraftStore, NewUpload, SeaOrmStore, UploadError};
 use keryx_policy::{validate_html, PolicyOptions, DEFAULT_MAX_HTML_BYTES};
 use keryx_render::pdf::{render_version_pdf, PdfIdentity};
 use keryx_render::{
@@ -112,6 +111,11 @@ pub struct ServeArgs {
     #[arg(long, env = "KERYX_DB")]
     pub db: Option<PathBuf>,
 
+    /// Skip the snapshot Keryx takes before it first adopts a database
+    /// written by an older version
+    #[arg(long, env = "KERYX_NO_BACKUP")]
+    pub no_backup: bool,
+
     /// Directory for local state: the push identity, the blob staging area,
     /// and the stored HTML files when --storage is disk (default: ~/.keryx)
     #[arg(long, env = "KERYX_DATA_DIR")]
@@ -173,7 +177,7 @@ impl ServeArgs {
 }
 
 struct AppState {
-    db: Arc<Mutex<Connection>>,
+    db: Arc<dyn DraftStore>,
     store: Arc<dyn BlobBackend>,
     public_base_url: Option<String>,
     api_key_hash: Option<String>,
@@ -198,7 +202,6 @@ pub fn default_db_path() -> PathBuf {
 pub fn run(args: ServeArgs) -> Result<()> {
     let db_path = args.db.clone().unwrap_or_else(default_db_path);
     let data_dir = args.data_dir.clone().unwrap_or_else(default_state_dir);
-    let conn = db::open(&db_path)?;
     let public_base_url = args
         .public_base_url
         .as_deref()
@@ -227,8 +230,12 @@ pub fn run(args: ServeArgs) -> Result<()> {
         let probe_ms = probe_started.elapsed().as_millis();
         let blob_description = store.describe().to_string();
 
+        // Opening adopts a legacy database in place, after a backup.
+        let (store_db, adoption) = SeaOrmStore::open_sqlite(&db_path, !args.no_backup).await?;
+        let db_status = adoption.to_string();
+
         let state: SharedState = Arc::new(AppState {
-            db: Arc::new(Mutex::new(conn)),
+            db: Arc::new(store_db),
             store,
             public_base_url,
             api_key_hash,
@@ -246,7 +253,7 @@ pub fn run(args: ServeArgs) -> Result<()> {
             .await
             .with_context(|| format!("binding {addr}"))?;
         println!("keryx serving on http://{addr}");
-        println!("database: {}", db_path.display());
+        println!("database: {} ({db_status})", db_path.display());
         println!("blobs: {blob_description} (probe ok, {probe_ms} ms)");
         println!(
             "policy: max {} bytes{}{}",
@@ -433,7 +440,7 @@ fn fill_urls(draft: &mut DraftSummary, base: &str) {
 
 async fn dashboard(State(state): State<SharedState>, headers: HeaderMap) -> Response {
     let base = base_url(&state, &headers);
-    let drafts = dashboard_drafts(&state, &base);
+    let drafts = dashboard_drafts(&state, &base).await;
     match drafts {
         Ok(drafts) => Html(render_dashboard(
             &drafts,
@@ -445,11 +452,8 @@ async fn dashboard(State(state): State<SharedState>, headers: HeaderMap) -> Resp
     }
 }
 
-fn dashboard_drafts(state: &AppState, base: &str) -> Result<Vec<DraftSummary>> {
-    let mut drafts = {
-        let conn = state.db.lock().unwrap();
-        db::list_drafts(&conn)?
-    };
+async fn dashboard_drafts(state: &AppState, base: &str) -> Result<Vec<DraftSummary>> {
+    let mut drafts = state.db.list_drafts().await?;
     for draft in &mut drafts {
         fill_urls(draft, base);
     }
@@ -469,7 +473,7 @@ async fn dashboard_snapshot(
     headers: HeaderMap,
 ) -> Response {
     let base = base_url(&state, &headers);
-    let drafts = match dashboard_drafts(&state, &base) {
+    let drafts = match dashboard_drafts(&state, &base).await {
         Ok(drafts) => drafts,
         Err(error) => return internal_error(error),
     };
@@ -524,12 +528,7 @@ async fn dashboard_events(
 }
 
 async fn healthz(State(state): State<SharedState>) -> Response {
-    let result = {
-        let conn = state.db.lock().unwrap();
-        conn.query_row("SELECT 1", [], |_| Ok(()))
-            .map_err(anyhow::Error::from)
-    };
-    match result {
+    match state.db.ping().await {
         Ok(()) => Json(json!({ "ok": true })).into_response(),
         Err(error) => (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -599,10 +598,10 @@ async fn upload(
         .map(str::to_string);
 
     // 1. Cheap read: resolve or mint the draft id.
-    let target = {
-        let conn = state.db.lock().unwrap();
-        db::resolve_upload_target(&conn, clean_text(body.draft_id.as_deref(), 255))
-    };
+    let target = state
+        .db
+        .resolve_upload_target(clean_text(body.draft_id.as_deref(), 255))
+        .await;
     let (draft_id, created) = match target {
         Ok(target) => target,
         Err(UploadError::DraftNotFound) => {
@@ -634,10 +633,7 @@ async fn upload(
         has_inline_script: validation.has_inline_script,
         external_image_hosts: &validation.external_image_hosts,
     };
-    let outcome = {
-        let mut conn = state.db.lock().unwrap();
-        db::record_upload(&mut conn, upload)
-    };
+    let outcome = state.db.record_upload(upload).await;
     if outcome.is_err() {
         // The draft went away mid-upload, or the record step failed: the blob
         // has no row. Best effort; anything that slips through is an orphan.
@@ -677,10 +673,7 @@ async fn list_drafts(State(state): State<SharedState>, headers: HeaderMap) -> Re
         return unauthorized();
     }
     let base = base_url(&state, &headers);
-    let drafts = {
-        let conn = state.db.lock().unwrap();
-        db::list_drafts(&conn)
-    };
+    let drafts = state.db.list_drafts().await;
     match drafts {
         Ok(mut drafts) => {
             for draft in &mut drafts {
@@ -701,10 +694,13 @@ async fn draft_detail(
         return unauthorized();
     }
     let base = base_url(&state, &headers);
-    let result = {
-        let conn = state.db.lock().unwrap();
-        db::get_draft_summary(&conn, &draft_id)
-            .and_then(|draft| Ok((draft, db::list_versions(&conn, &draft_id)?)))
+    let result = match state.db.get_draft_summary(&draft_id).await {
+        Ok(draft) => state
+            .db
+            .list_versions(&draft_id)
+            .await
+            .map(|versions| (draft, versions)),
+        Err(error) => Err(error),
     };
     match result {
         Ok((Some(mut draft), versions)) => {
@@ -736,10 +732,7 @@ async fn publish_pdf(
         return json_error(StatusCode::BAD_REQUEST, "Version must be at least 1.");
     }
 
-    let served = {
-        let conn = state.db.lock().unwrap();
-        db::find_public_version(&conn, &draft_id, query.version)
-    };
+    let served = state.db.find_public_version(&draft_id, query.version).await;
     let served = match served {
         Ok(Some(served)) => served,
         Ok(None) => return json_error(StatusCode::NOT_FOUND, "Draft version not found."),
@@ -826,10 +819,7 @@ async fn delete_draft(
     }
 
     if query.purge.unwrap_or(false) {
-        let result = {
-            let mut conn = state.db.lock().unwrap();
-            db::purge_draft(&mut conn, &draft_id)
-        };
+        let result = state.db.purge_draft(&draft_id).await;
         return match result {
             Ok(Some(keys)) => {
                 state.dashboard_updates.changed();
@@ -841,10 +831,7 @@ async fn delete_draft(
         };
     }
 
-    let result = {
-        let conn = state.db.lock().unwrap();
-        db::soft_delete_draft(&conn, &draft_id)
-    };
+    let result = state.db.soft_delete_draft(&draft_id).await;
     match result {
         Ok(true) => {
             state.dashboard_updates.changed();
@@ -860,10 +847,7 @@ async fn purge_deleted(State(state): State<SharedState>, headers: HeaderMap) -> 
     if !authorized(&state, &headers) {
         return unauthorized();
     }
-    let result = {
-        let mut conn = state.db.lock().unwrap();
-        db::purge_deleted_drafts(&mut conn)
-    };
+    let result = state.db.purge_deleted_drafts().await;
     match result {
         Ok((count, keys)) => {
             if count > 0 {
@@ -909,7 +893,7 @@ async fn set_availability(
             )
         }
     };
-    apply_availability(&state, &headers, &draft_id, update)
+    apply_availability(&state, &headers, &draft_id, update).await
 }
 
 /// Compatibility adapter for the original disable route; it routes through
@@ -935,9 +919,10 @@ async fn disable_draft(
         &draft_id,
         AvailabilityUpdate::Disabled { reason },
     )
+    .await
 }
 
-fn apply_availability(
+async fn apply_availability(
     state: &AppState,
     headers: &HeaderMap,
     draft_id: &str,
@@ -949,10 +934,7 @@ fn apply_availability(
         },
         other => other,
     };
-    let result = {
-        let mut conn = state.db.lock().unwrap();
-        db::set_availability(&mut conn, draft_id, &update)
-    };
+    let result = state.db.set_availability(draft_id, &update).await;
     match result {
         Ok(mut draft) => {
             state.push.wake();
@@ -992,10 +974,7 @@ async fn serve_version(
 /// CSP never changes the bytes a client reads; it only constrains what the
 /// page may do if a human opens it in a browser.
 async fn serve_draft(state: &AppState, draft_id: &str, version: Option<i64>) -> Response {
-    let found = {
-        let conn = state.db.lock().unwrap();
-        db::find_public_version(&conn, draft_id, version)
-    };
+    let found = state.db.find_public_version(draft_id, version).await;
     match found {
         Ok(Some(served)) => {
             let html = match state.store.get(&served.object_key).await {
@@ -1059,10 +1038,7 @@ async fn push_subscribe(
             &format!("Subscription endpoint rejected: {error}."),
         );
     }
-    let result = {
-        let conn = state.db.lock().unwrap();
-        db::upsert_push_subscription(&conn, &input)
-    };
+    let result = state.db.upsert_push_subscription(&input).await;
     match result {
         Ok(subscription) => {
             Json(json!({ "ok": true, "subscription": subscription })).into_response()
@@ -1087,10 +1063,7 @@ async fn push_unsubscribe(
     let Ok(Json(body)) = body else {
         return json_error(StatusCode::BAD_REQUEST, "Endpoint is required.");
     };
-    let result = {
-        let conn = state.db.lock().unwrap();
-        db::remove_push_subscription(&conn, &body.endpoint)
-    };
+    let result = state.db.remove_push_subscription(&body.endpoint).await;
     match result {
         Ok(removed) => Json(json!({ "ok": true, "removed": removed })).into_response(),
         Err(error) => internal_error(error),
@@ -1143,6 +1116,7 @@ fn clean_text(value: Option<&str>, max_length: usize) -> Option<String> {
 mod tests {
     use super::*;
     use axum::body::to_bytes;
+    use std::sync::Mutex;
 
     /// Store the blob and record its metadata, as the upload handler does.
     async fn record(
@@ -1150,18 +1124,14 @@ mod tests {
         html: &str,
         draft_id: Option<String>,
         metadata: &UploadMetadata,
-    ) -> db::UploadOutcome {
-        let (draft_id, created) = {
-            let conn = state.db.lock().unwrap();
-            db::resolve_upload_target(&conn, draft_id).unwrap()
-        };
+    ) -> keryx_db::UploadOutcome {
+        let (draft_id, created) = state.db.resolve_upload_target(draft_id).await.unwrap();
         let version_id = new_internal_id();
         let object_key = object_key(&draft_id, &version_id);
         state.store.put(&object_key, html).await.unwrap();
-        let mut conn = state.db.lock().unwrap();
-        db::record_upload(
-            &mut conn,
-            NewUpload {
+        state
+            .db
+            .record_upload(NewUpload {
                 html,
                 filename: Some("report.html".into()),
                 draft_id,
@@ -1175,22 +1145,26 @@ mod tests {
                 user_agent: None,
                 has_inline_script: false,
                 external_image_hosts: &[],
-            },
-        )
-        .unwrap()
+            })
+            .await
+            .unwrap()
     }
 
     /// A protected server (API key "secret") on an in-memory store.
-    fn test_state() -> SharedState {
-        test_state_with(keryx_store::memory_backend())
+    async fn test_state() -> SharedState {
+        test_state_with(keryx_store::memory_backend()).await
     }
 
-    fn test_state_with(store: Arc<dyn BlobBackend>) -> SharedState {
-        let conn = db::test_connection();
-        // db::open turns this on for a real database; purge relies on it.
-        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-        Arc::new(AppState {
-            db: Arc::new(Mutex::new(conn)),
+    async fn test_state_with(store: Arc<dyn BlobBackend>) -> SharedState {
+        test_state_and_db(store).await.0
+    }
+
+    /// The state plus the concrete store behind it, for tests that look at
+    /// rows no store method exposes.
+    async fn test_state_and_db(store: Arc<dyn BlobBackend>) -> (SharedState, Arc<SeaOrmStore>) {
+        let db = Arc::new(SeaOrmStore::open_memory().await);
+        let state = Arc::new(AppState {
+            db: db.clone(),
             store,
             public_base_url: Some("https://keryx.test".into()),
             api_key_hash: Some(keryx_core::sha256_hex("secret")),
@@ -1201,7 +1175,8 @@ mod tests {
                 "mailto:test@keryx.test".into(),
             )),
             dashboard_updates: DashboardUpdates::new(),
-        })
+        });
+        (state, db)
     }
 
     #[test]
@@ -1227,7 +1202,7 @@ mod tests {
 
     #[tokio::test]
     async fn pdf_endpoint_is_authenticated_versioned_and_ephemeral() {
-        let state = test_state();
+        let (state, db) = test_state_and_db(keryx_store::memory_backend()).await;
         let metadata = UploadMetadata::default();
         let draft_id = {
             let first = record(
@@ -1262,19 +1237,17 @@ mod tests {
             HeaderValue::from_static("Bearer secret"),
         );
         // Publishing a PDF creates neither a version nor a notification.
-        let counts = |state: &AppState| -> (i64, i64) {
-            state
-                .db
-                .lock()
-                .unwrap()
-                .query_row(
-                    "SELECT (SELECT COUNT(*) FROM draft_versions), (SELECT COUNT(*) FROM notification_events)",
-                    [],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .unwrap()
+        let counts = || async {
+            (
+                db.peek::<i64>("SELECT COUNT(*) FROM draft_versions")
+                    .await
+                    .unwrap(),
+                db.peek::<i64>("SELECT COUNT(*) FROM notification_events")
+                    .await
+                    .unwrap(),
+            )
         };
-        let before = counts(&state);
+        let before = counts().await;
         assert_eq!(before.1, 2);
         let response = publish_pdf(
             State(state.clone()),
@@ -1307,7 +1280,7 @@ mod tests {
         assert_eq!(explicit.status(), StatusCode::OK);
         assert_eq!(explicit.headers()["x-keryx-draft-version"], "1");
 
-        assert_eq!(counts(&state), before);
+        assert_eq!(counts().await, before);
         let stored = state.store.list("").await.unwrap();
         assert!(stored.iter().all(|entry| !entry.key.ends_with(".pdf")));
     }
@@ -1338,7 +1311,7 @@ mod tests {
 
     #[tokio::test]
     async fn realtime_routes_stream_invalidations_and_keep_protected_snapshots_redacted() {
-        let state = test_state();
+        let state = test_state().await;
         let metadata = UploadMetadata {
             repo_org: Some("SimCubeLtd".into()),
             repo_name: Some("keryx".into()),
@@ -1385,7 +1358,7 @@ mod tests {
 
     #[tokio::test]
     async fn push_subscription_routes_are_authenticated_and_validate_endpoints() {
-        let state = test_state();
+        let state = test_state().await;
         let mut headers = HeaderMap::new();
         headers.insert(
             header::AUTHORIZATION,
@@ -1438,7 +1411,7 @@ mod tests {
 
     #[tokio::test]
     async fn availability_route_owns_every_transition() {
-        let state = test_state();
+        let (state, db) = test_state_and_db(keryx_store::memory_backend()).await;
         let mut dashboard_updates = state.dashboard_updates.subscribe();
         let metadata = UploadMetadata::default();
         let draft_id = {
@@ -1535,15 +1508,11 @@ mod tests {
             serve_draft(&state, &draft_id, None).await.status(),
             StatusCode::NOT_FOUND
         );
-        let reason: String = state
-            .db
-            .lock()
-            .unwrap()
-            .query_row(
-                "SELECT disabled_reason FROM drafts WHERE id = ?1",
-                [&draft_id],
-                |row| row.get(0),
-            )
+        let reason: String = db
+            .peek(&format!(
+                "SELECT disabled_reason FROM drafts WHERE id = '{draft_id}'"
+            ))
+            .await
             .unwrap();
         assert_eq!(reason, "Superseded");
 
@@ -1570,7 +1539,7 @@ mod tests {
         fail_remove: bool,
         /// Runs once, after a successful put: the window in which a draft can
         /// vanish between resolve and record.
-        after_put: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+        after_put: Mutex<Option<futures_util::future::BoxFuture<'static, ()>>>,
         removed: Mutex<Vec<Vec<String>>>,
     }
 
@@ -1594,8 +1563,9 @@ mod tests {
                 anyhow::bail!("scripted put failure");
             }
             self.inner().put(key, html).await?;
-            if let Some(hook) = self.after_put.lock().unwrap().take() {
-                hook();
+            let hook = self.after_put.lock().unwrap().take();
+            if let Some(hook) = hook {
+                hook.await;
             }
             Ok(())
         }
@@ -1644,45 +1614,42 @@ mod tests {
         .await
     }
 
-    fn row_count(state: &AppState, table: &str) -> i64 {
-        let conn = state.db.lock().unwrap();
-        conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
-            row.get(0)
-        })
-        .unwrap()
+    async fn row_count(db: &SeaOrmStore, table: &str) -> i64 {
+        db.peek(&format!("SELECT COUNT(*) FROM {table}"))
+            .await
+            .unwrap()
     }
 
     #[tokio::test]
     async fn a_failed_blob_put_leaves_no_draft_or_version_row() {
-        let state = test_state_with(Arc::new(ScriptedBackend {
+        let (state, db) = test_state_and_db(Arc::new(ScriptedBackend {
             fail_put: true,
             ..ScriptedBackend::new()
-        }));
+        }))
+        .await;
 
         let response = post_upload(&state, None).await;
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        assert_eq!(row_count(&state, "drafts"), 0);
-        assert_eq!(row_count(&state, "draft_versions"), 0);
+        assert_eq!(row_count(&db, "drafts").await, 0);
+        assert_eq!(row_count(&db, "draft_versions").await, 0);
     }
 
     #[tokio::test]
     async fn an_upload_to_a_draft_purged_mid_flight_fails_cleanly_and_removes_its_blob() {
         let backend = Arc::new(ScriptedBackend::new());
-        let state = test_state_with(backend.clone());
+        let (state, db) = test_state_and_db(backend.clone()).await;
         let draft_id = record(&state, "<p>v1</p>", None, &UploadMetadata::default())
             .await
             .draft_id;
         // Arm a purge to run between the blob put and the record step.
-        let (db, id) = (state.db.clone(), draft_id.clone());
-        *backend.after_put.lock().unwrap() = Some(Box::new(move || {
-            db::purge_draft(&mut db.lock().unwrap(), &id)
-                .unwrap()
-                .unwrap();
+        let (purging, id) = (state.db.clone(), draft_id.clone());
+        *backend.after_put.lock().unwrap() = Some(Box::pin(async move {
+            purging.purge_draft(&id).await.unwrap().unwrap();
         }));
 
         let response = post_upload(&state, Some(&draft_id)).await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        assert_eq!(row_count(&state, "draft_versions"), 0);
+        assert_eq!(row_count(&db, "draft_versions").await, 0);
 
         // The handler removed exactly the blob it had just written.
         let removed = backend.removed.lock().unwrap().clone();
@@ -1698,18 +1665,18 @@ mod tests {
             fail_remove: true,
             ..ScriptedBackend::new()
         });
-        let state = test_state_with(backend.clone());
+        let state = test_state_with(backend.clone()).await;
         let metadata = UploadMetadata::default();
         let first = record(&state, "<p>v1</p>", None, &metadata).await;
         record(&state, "<p>v2</p>", Some(first.draft_id.clone()), &metadata).await;
-        let mut expected: Vec<String> = {
-            let conn = state.db.lock().unwrap();
-            let mut statement = conn
-                .prepare("SELECT object_key FROM draft_versions")
-                .unwrap();
-            let keys = statement.query_map([], |row| row.get(0)).unwrap();
-            keys.collect::<Result<_, _>>().unwrap()
-        };
+        let mut expected: Vec<String> = state
+            .db
+            .blob_records()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|record| record.object_key)
+            .collect();
         expected.sort();
 
         let response = delete_draft(
@@ -1730,14 +1697,14 @@ mod tests {
 
     #[tokio::test]
     async fn a_version_whose_blob_is_missing_serves_not_found() {
-        let state = test_state();
+        let state = test_state().await;
         let outcome = record(&state, "<p>v1</p>", None, &UploadMetadata::default()).await;
-        let served = {
-            let conn = state.db.lock().unwrap();
-            db::find_public_version(&conn, &outcome.draft_id, None)
-                .unwrap()
-                .unwrap()
-        };
+        let served = state
+            .db
+            .find_public_version(&outcome.draft_id, None)
+            .await
+            .unwrap()
+            .unwrap();
         state.store.remove_many(&[served.object_key]).await.unwrap();
 
         let response = serve_draft(&state, &outcome.draft_id, None).await;

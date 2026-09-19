@@ -163,6 +163,17 @@ impl SeaOrmStore {
         &self.db
     }
 
+    /// One value from one row of raw SQL, for tests that assert on rows no
+    /// store method exposes. `None` when the value is NULL or no row matched.
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn peek<T: sea_orm::TryGetable>(&self, sql: &str) -> Option<T> {
+        self.db
+            .query_one_raw(Statement::from_string(self.db.get_database_backend(), sql))
+            .await
+            .expect("peek query")
+            .and_then(|row| row.try_get_by_index::<Option<T>>(0).expect("peek column"))
+    }
+
     /// Every write transaction begins immediate. A deferred read-then-write
     /// transaction fails with SQLITE_BUSY regardless of the busy timeout, and
     /// record_upload is exactly that shape. Ignored on Postgres.

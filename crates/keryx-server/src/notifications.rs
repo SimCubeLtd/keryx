@@ -7,7 +7,7 @@
 
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -15,7 +15,6 @@ use axum::http::{Request, Uri};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use chrono::{DateTime, Utc};
-use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::Notify;
@@ -24,7 +23,7 @@ use web_push_native::p256::PublicKey;
 use web_push_native::{Auth, WebPushBuilder};
 
 use crate::realtime::DashboardUpdates;
-use keryx_db::{self as db, PendingDelivery};
+use keryx_db::{DraftStore, PendingDelivery};
 
 const VAPID_FILE: &str = "vapid.json";
 /// Temporary failures are retried with doubling delays; after this many
@@ -319,38 +318,38 @@ async fn deliver(
 
 /// Record what happened to one delivery: done, retry later, or forget the
 /// subscription.
-pub fn apply_outcome(
-    conn: &Connection,
+pub async fn apply_outcome(
+    db: &dyn DraftStore,
     delivery: &PendingDelivery,
     outcome: DeliveryOutcome,
 ) -> Result<()> {
     let key = &delivery.event.key;
     let subscription = &delivery.subscription_id;
     match outcome {
-        DeliveryOutcome::Delivered => db::delivery_done(conn, key, subscription)?,
+        DeliveryOutcome::Delivered => db.delivery_done(key, subscription).await?,
         DeliveryOutcome::Expired => {
-            db::remove_push_subscription_by_id(conn, subscription)?;
+            db.remove_push_subscription_by_id(subscription).await?;
             eprintln!("push: removed expired subscription {subscription}");
         }
         DeliveryOutcome::Retry => {
             let attempts = delivery.attempts + 1;
             if attempts >= MAX_ATTEMPTS {
-                db::delivery_done(conn, key, subscription)?;
+                db.delivery_done(key, subscription).await?;
                 eprintln!("push: giving up on {key} for {subscription} after {attempts} attempts");
             } else {
                 let next =
                     Utc::now() + chrono::Duration::seconds(backoff_seconds(delivery.attempts));
-                db::delivery_retry(
-                    conn,
+                db.delivery_retry(
                     key,
                     subscription,
                     attempts,
                     &keryx_core::format_timestamp(next),
-                )?;
+                )
+                .await?;
             }
         }
         DeliveryOutcome::Rejected(reason) => {
-            db::delivery_done(conn, key, subscription)?;
+            db.delivery_done(key, subscription).await?;
             eprintln!("push: dropped {key} for {subscription}: {reason}");
         }
     }
@@ -375,7 +374,7 @@ fn sleep_until(next: Option<String>) -> Duration {
 /// a handler calls [`PushHub::wake`]. The first pass after a restart picks up
 /// anything that came due while the server was down.
 pub async fn run_dispatcher(
-    db: Arc<Mutex<Connection>>,
+    db: Arc<dyn DraftStore>,
     hub: Arc<PushHub>,
     dashboard_updates: DashboardUpdates,
 ) {
@@ -391,27 +390,26 @@ pub async fn run_dispatcher(
 
     loop {
         let now = keryx_core::now();
-        let (due, dashboard_changed) = {
-            let mut conn = db.lock().unwrap();
-            let dashboard_changed = match db::record_due_wakes(&mut conn, &now) {
-                Ok(woke) => {
-                    let changed = !woke.is_empty();
-                    for event in woke {
-                        println!("notification: {} · {}", event.title, event.draft_id);
-                    }
-                    changed
+        let dashboard_changed = match db.record_due_wakes(&now).await {
+            Ok(woke) => {
+                let changed = !woke.is_empty();
+                for event in woke {
+                    println!("notification: {} · {}", event.title, event.draft_id);
                 }
-                Err(error) => {
-                    eprintln!("notifications: recording wakes failed: {error:#}");
-                    false
-                }
-            };
-            let due = db::due_deliveries(&conn, &now, BATCH).unwrap_or_else(|error| {
+                changed
+            }
+            Err(error) => {
+                eprintln!("notifications: recording wakes failed: {error:#}");
+                false
+            }
+        };
+        let due = db
+            .due_deliveries(&now, BATCH)
+            .await
+            .unwrap_or_else(|error| {
                 eprintln!("notifications: reading deliveries failed: {error:#}");
                 Vec::new()
             });
-            (due, dashboard_changed)
-        };
         if dashboard_changed {
             dashboard_updates.changed();
         }
@@ -432,8 +430,7 @@ pub async fn run_dispatcher(
             }
             match in_flight.join_next().await {
                 Some(Ok((delivery, outcome))) => {
-                    let conn = db.lock().unwrap();
-                    if let Err(error) = apply_outcome(&conn, &delivery, outcome) {
+                    if let Err(error) = apply_outcome(&*db, &delivery, outcome).await {
                         eprintln!("notifications: updating delivery failed: {error:#}");
                     }
                 }
@@ -445,16 +442,13 @@ pub async fn run_dispatcher(
             continue;
         }
 
-        let next = {
-            let conn = db.lock().unwrap();
-            [
-                db::next_wake_at(&conn, &keryx_core::now()).ok().flatten(),
-                db::next_delivery_at(&conn).ok().flatten(),
-            ]
-            .into_iter()
-            .flatten()
-            .min()
-        };
+        let next = [
+            db.next_wake_at(&keryx_core::now()).await.ok().flatten(),
+            db.next_delivery_at().await.ok().flatten(),
+        ]
+        .into_iter()
+        .flatten()
+        .min();
         tokio::select! {
             _ = hub.wake.notified() => {}
             _ = tokio::time::sleep(sleep_until(next)) => {}
@@ -559,19 +553,24 @@ mod tests {
         }
     }
 
-    #[test]
-    fn push_requests_are_encrypted_and_signed_with_a_same_origin_target() {
+    #[tokio::test]
+    async fn push_requests_are_encrypted_and_signed_with_a_same_origin_target() {
         let hub = PushHub::new(VapidIdentity::generate(), default_contact(None));
-        let conn = db::test_connection();
-        db::upsert_push_subscription(&conn, &fake_subscription()).unwrap();
+        let store = keryx_db::SeaOrmStore::open_memory().await;
+        store
+            .upsert_push_subscription(&fake_subscription())
+            .await
+            .unwrap();
         let event = NotificationEvent::woke(
             "abc123def456",
             "Release checklist",
             "2026-08-28T08:00:00.000Z",
             "2026-08-28T08:00:00.100Z",
         );
-        assert!(db::record_event(&conn, &event).unwrap());
-        let delivery = db::due_deliveries(&conn, "2026-08-28T08:00:00.100Z", 10)
+        assert!(store.record_event(&event).await.unwrap());
+        let delivery = store
+            .due_deliveries("2026-08-28T08:00:00.100Z", 10)
+            .await
             .unwrap()
             .remove(0);
 
@@ -592,25 +591,40 @@ mod tests {
         assert_eq!(event.target, "/d/abc123def456");
     }
 
-    #[test]
-    fn outcomes_retry_with_backoff_give_up_and_drop_expired_subscriptions() {
-        let conn = db::test_connection();
-        let subscription = db::upsert_push_subscription(&conn, &fake_subscription()).unwrap();
+    #[tokio::test]
+    async fn outcomes_retry_with_backoff_give_up_and_drop_expired_subscriptions() {
+        let store = keryx_db::SeaOrmStore::open_memory().await;
+        let subscription = store
+            .upsert_push_subscription(&fake_subscription())
+            .await
+            .unwrap();
         assert_eq!(subscription.events, NotificationKind::ALL.to_vec());
         let event =
             NotificationEvent::published("abc123def456", "Plan", "V1", "2026-08-28T08:00:00.000Z");
-        db::record_event(&conn, &event).unwrap();
+        store.record_event(&event).await.unwrap();
         let far_future = "2099-01-01T00:00:00.000Z";
 
-        let delivery = db::due_deliveries(&conn, far_future, 10).unwrap().remove(0);
-        apply_outcome(&conn, &delivery, DeliveryOutcome::Retry).unwrap();
-        assert!(db::due_deliveries(&conn, &keryx_core::now(), 10)
+        let delivery = store
+            .due_deliveries(far_future, 10)
+            .await
+            .unwrap()
+            .remove(0);
+        apply_outcome(&store, &delivery, DeliveryOutcome::Retry)
+            .await
+            .unwrap();
+        assert!(store
+            .due_deliveries(&keryx_core::now(), 10)
+            .await
             .unwrap()
             .is_empty());
-        let retried = db::due_deliveries(&conn, far_future, 10).unwrap().remove(0);
+        let retried = store
+            .due_deliveries(far_future, 10)
+            .await
+            .unwrap()
+            .remove(0);
         assert_eq!(retried.attempts, 1);
         // The first retry waits the documented 30 seconds.
-        let next = DateTime::parse_from_rfc3339(&db::next_delivery_at(&conn).unwrap().unwrap())
+        let next = DateTime::parse_from_rfc3339(&store.next_delivery_at().await.unwrap().unwrap())
             .unwrap()
             .with_timezone(&Utc);
         let wait = (next - Utc::now()).num_seconds();
@@ -620,22 +634,35 @@ mod tests {
             attempts: MAX_ATTEMPTS - 1,
             ..retried
         };
-        apply_outcome(&conn, &exhausted, DeliveryOutcome::Retry).unwrap();
-        assert!(db::due_deliveries(&conn, far_future, 10)
+        apply_outcome(&store, &exhausted, DeliveryOutcome::Retry)
+            .await
+            .unwrap();
+        assert!(store
+            .due_deliveries(far_future, 10)
+            .await
             .unwrap()
             .is_empty());
-        assert_eq!(db::next_delivery_at(&conn).unwrap(), None);
+        assert_eq!(store.next_delivery_at().await.unwrap(), None);
 
         let second =
             NotificationEvent::revised("abc123def456", "Plan", "V2", 2, "2026-08-28T09:00:00.000Z");
-        db::record_event(&conn, &second).unwrap();
-        let delivery = db::due_deliveries(&conn, far_future, 10).unwrap().remove(0);
-        apply_outcome(&conn, &delivery, DeliveryOutcome::Expired).unwrap();
-        assert!(db::due_deliveries(&conn, far_future, 10)
+        store.record_event(&second).await.unwrap();
+        let delivery = store
+            .due_deliveries(far_future, 10)
+            .await
+            .unwrap()
+            .remove(0);
+        apply_outcome(&store, &delivery, DeliveryOutcome::Expired)
+            .await
+            .unwrap();
+        assert!(store
+            .due_deliveries(far_future, 10)
+            .await
             .unwrap()
             .is_empty());
-        assert!(
-            !db::remove_push_subscription(&conn, "https://push.example.test/send/abc").unwrap()
-        );
+        assert!(!store
+            .remove_push_subscription("https://push.example.test/send/abc")
+            .await
+            .unwrap());
     }
 }

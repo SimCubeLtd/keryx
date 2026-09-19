@@ -84,6 +84,7 @@ keryx serve
 | `--port` / `KERYX_PORT` | `7812` | Listen port |
 | `--host` / `KERYX_HOST` | `127.0.0.1` | Bind address |
 | `--db` / `KERYX_DB` | `~/.keryx/keryx.db` | SQLite path (metadata index) |
+| `--no-backup` / `KERYX_NO_BACKUP` | off | Skip the snapshot taken before a database from an older Keryx is first adopted. See [Upgrading](#upgrading) |
 | `--data-dir` / `KERYX_DATA_DIR` | `~/.keryx` | Local state: the push identity, the `.staging` write area, and the HTML files (under `drafts/`) when storage is `disk` |
 | `--storage` / `KERYX_STORAGE` | `disk` | Where draft HTML lives: `disk` or `s3`. See [Storage](#storage) |
 | `--public-base-url` / `KERYX_PUBLIC_BASE_URL` | request Host header | Base for returned links |
@@ -109,6 +110,19 @@ Routes: `POST /api/uploads`, `GET/DELETE /api/drafts[/:id]`,
 `GET /api/push/vapid`, `PUT/DELETE /api/push/subscriptions`,
 `GET /d/:id[/raw]`, `GET /d/:id/v/:n[/raw]`, `GET /manifest.webmanifest`,
 `GET /sw.js`, `GET /healthz`.
+
+## Upgrading
+
+A database written by an older Keryx keeps working in place. The first time
+a newer server opens it, Keryx takes a consistent snapshot next to it
+(`keryx.db.backup-<timestamp>`, written with `VACUUM INTO`, so nothing still
+in the write-ahead log is missed), brings the schema to the current shape,
+and records that in a `seaql_migrations` table. The startup banner says what
+it did. It happens once; `--no-backup` skips the snapshot.
+
+Nothing is moved or rewritten, and `PRAGMA user_version` is left alone, so
+the previous Keryx release can still open the same file if you need to go
+back.
 
 ## Storage
 
