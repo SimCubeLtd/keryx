@@ -25,6 +25,7 @@ use serde_json::json;
 
 use crate::notifications::{PushHub, VapidIdentity};
 use crate::realtime::DashboardUpdates;
+use keryx_core::ids::new_internal_id;
 use keryx_core::types::{
     Availability, AvailabilityUpdate, DraftDetail, DraftSummary, PushSubscriptionInput,
     UploadMetadata, UploadResponse,
@@ -515,10 +516,34 @@ async fn upload(
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
 
+    // 1. Cheap read: resolve or mint the draft id.
+    let target = {
+        let conn = state.db.lock().unwrap();
+        db::resolve_upload_target(&conn, clean_text(body.draft_id.as_deref(), 255))
+    };
+    let (draft_id, created) = match target {
+        Ok(target) => target,
+        Err(UploadError::DraftNotFound) => {
+            return json_error(StatusCode::NOT_FOUND, "Draft not found.")
+        }
+        Err(UploadError::Other(error)) => return internal_error(error),
+    };
+    let version_id = new_internal_id();
+    let object_key = BlobStore::object_key(&draft_id, &version_id);
+
+    // 2. The blob lands before the metadata commits, with no transaction open.
+    if let Err(error) = state.store.put(&object_key, &html) {
+        return internal_error(error);
+    }
+
+    // 3. Metadata only, with the ids and key handed in.
     let upload = NewUpload {
         html: &html,
         filename: clean_text(body.filename.as_deref(), 255),
-        draft_id: clean_text(body.draft_id.as_deref(), 255),
+        draft_id,
+        created,
+        version_id,
+        object_key: object_key.clone(),
         description: clean_text(body.description.as_deref(), 1000),
         title_from_html: validation.title.clone(),
         metadata: &body.metadata,
@@ -527,11 +552,17 @@ async fn upload(
         has_inline_script: validation.has_inline_script,
         external_image_hosts: &validation.external_image_hosts,
     };
-
     let outcome = {
         let mut conn = state.db.lock().unwrap();
-        db::record_upload(&mut conn, &state.store, upload)
+        db::record_upload(&mut conn, upload)
     };
+    if outcome.is_err() {
+        // The draft went away mid-upload, or the record step failed: the blob
+        // has no row. Best effort; anything that slips through is an orphan.
+        if let Err(error) = state.store.remove(&object_key) {
+            eprintln!("upload: failed to remove orphan blob {object_key}: {error:#}");
+        }
+    }
 
     match outcome {
         Ok(outcome) => {
@@ -1026,23 +1057,37 @@ mod tests {
     use super::*;
     use axum::body::to_bytes;
 
-    fn upload<'a>(
-        html: &'a str,
+    /// Store the blob and record its metadata, as the upload handler does.
+    fn record(
+        state: &AppState,
+        html: &str,
         draft_id: Option<String>,
-        metadata: &'a UploadMetadata,
-    ) -> NewUpload<'a> {
-        NewUpload {
-            html,
-            filename: Some("report.html".into()),
-            draft_id,
-            description: None,
-            title_from_html: Some("PDF endpoint test".into()),
-            metadata,
-            source_ip: None,
-            user_agent: None,
-            has_inline_script: false,
-            external_image_hosts: &[],
-        }
+        metadata: &UploadMetadata,
+    ) -> db::UploadOutcome {
+        let mut conn = state.db.lock().unwrap();
+        let (draft_id, created) = db::resolve_upload_target(&conn, draft_id).unwrap();
+        let version_id = new_internal_id();
+        let object_key = BlobStore::object_key(&draft_id, &version_id);
+        state.store.put(&object_key, html).unwrap();
+        db::record_upload(
+            &mut conn,
+            NewUpload {
+                html,
+                filename: Some("report.html".into()),
+                draft_id,
+                created,
+                version_id,
+                object_key,
+                description: None,
+                title_from_html: Some("PDF endpoint test".into()),
+                metadata,
+                source_ip: None,
+                user_agent: None,
+                has_inline_script: false,
+                external_image_hosts: &[],
+            },
+        )
+        .unwrap()
     }
 
     /// A protected server (API key "secret") on a throwaway store.
@@ -1104,27 +1149,18 @@ mod tests {
         let state = test_state();
         let metadata = UploadMetadata::default();
         let draft_id = {
-            let mut conn = state.db.lock().unwrap();
-            let first = db::record_upload(
-                &mut conn,
-                &state.store,
-                upload(
-                    "<!doctype html><title>v1</title><h1>First</h1>",
-                    None,
-                    &metadata,
-                ),
-            )
-            .unwrap();
-            db::record_upload(
-                &mut conn,
-                &state.store,
-                upload(
-                    "<!doctype html><title>v2</title><h1>Latest</h1>",
-                    Some(first.draft_id.clone()),
-                    &metadata,
-                ),
-            )
-            .unwrap();
+            let first = record(
+                &state,
+                "<!doctype html><title>v1</title><h1>First</h1>",
+                None,
+                &metadata,
+            );
+            record(
+                &state,
+                "<!doctype html><title>v2</title><h1>Latest</h1>",
+                Some(first.draft_id.clone()),
+                &metadata,
+            );
             first.draft_id
         };
 
@@ -1228,17 +1264,12 @@ mod tests {
             ..UploadMetadata::default()
         };
         {
-            let mut conn = state.db.lock().unwrap();
-            db::record_upload(
-                &mut conn,
-                &state.store,
-                upload(
-                    "<!doctype html><title>Realtime</title><h1>Realtime</h1>",
-                    None,
-                    &metadata,
-                ),
-            )
-            .unwrap();
+            record(
+                &state,
+                "<!doctype html><title>Realtime</title><h1>Realtime</h1>",
+                None,
+                &metadata,
+            );
         }
 
         let snapshot = dashboard_snapshot(
@@ -1332,17 +1363,12 @@ mod tests {
         let mut dashboard_updates = state.dashboard_updates.subscribe();
         let metadata = UploadMetadata::default();
         let draft_id = {
-            let mut conn = state.db.lock().unwrap();
-            db::record_upload(
-                &mut conn,
-                &state.store,
-                upload(
-                    "<!doctype html><title>v1</title><h1>First</h1>",
-                    None,
-                    &metadata,
-                ),
+            record(
+                &state,
+                "<!doctype html><title>v1</title><h1>First</h1>",
+                None,
+                &metadata,
             )
-            .unwrap()
             .draft_id
         };
         let mut headers = HeaderMap::new();

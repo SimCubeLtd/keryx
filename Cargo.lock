@@ -2766,7 +2766,6 @@ dependencies = [
  "anyhow",
  "chrono",
  "keryx-core",
- "keryx-store",
  "rusqlite",
  "serde_json",
 ]

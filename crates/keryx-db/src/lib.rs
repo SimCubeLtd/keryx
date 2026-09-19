@@ -14,7 +14,6 @@ use keryx_core::types::{
     AvailabilityUpdate, DraftSummary, NotificationEvent, NotificationKind, PushSubscriptionInput,
     PushSubscriptionSummary, UploadMetadata, VersionInfo,
 };
-use keryx_store::BlobStore;
 
 pub fn open(path: &Path) -> Result<Connection> {
     if let Some(parent) = path.parent() {
@@ -174,10 +173,19 @@ fn table_columns(conn: &Connection, table: &str) -> Result<Vec<String>> {
     Ok(columns.collect::<Result<Vec<_>, _>>()?)
 }
 
+/// One upload, ready to record. The caller resolves the target with
+/// [`resolve_upload_target`], mints the version id, builds the object key and
+/// writes the blob *before* calling [`record_upload`], so no blob I/O ever
+/// happens inside the write transaction.
 pub struct NewUpload<'a> {
     pub html: &'a str,
     pub filename: Option<String>,
-    pub draft_id: Option<String>,
+    pub draft_id: String,
+    /// True when `draft_id` was freshly minted and the draft row is inserted
+    /// here; false when it names an existing draft.
+    pub created: bool,
+    pub version_id: String,
+    pub object_key: String,
     pub description: Option<String>,
     pub title_from_html: Option<String>,
     pub metadata: &'a UploadMetadata,
@@ -218,32 +226,61 @@ impl From<rusqlite::Error> for UploadError {
     }
 }
 
+/// Resolve where an upload lands: the existing live draft it names, or a
+/// freshly minted draft id. Answers `(draft_id, created)`. A cheap read, so
+/// the caller can write the blob afterwards without holding a transaction.
+pub fn resolve_upload_target(
+    conn: &Connection,
+    draft_id: Option<String>,
+) -> Result<(String, bool), UploadError> {
+    let Some(id) = draft_id else {
+        return Ok((new_draft_id(), true));
+    };
+    let live: Option<String> = conn
+        .query_row(
+            "SELECT id FROM drafts WHERE id = ?1 AND deleted_at IS NULL",
+            params![id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    match live {
+        Some(id) => Ok((id, false)),
+        None => Err(UploadError::DraftNotFound),
+    }
+}
+
+/// Record the metadata for a blob the caller has already written.
+///
+/// Ordering invariant: the blob lands before this transaction commits, so a
+/// crash leaves at most an orphan blob and never a version row pointing at
+/// nothing. The draft can be deleted or purged between
+/// [`resolve_upload_target`] and here, so an existing draft is re-checked
+/// inside the transaction; on `DraftNotFound` the caller removes its blob.
 pub fn record_upload(
     conn: &mut Connection,
-    store: &BlobStore,
     upload: NewUpload,
 ) -> Result<UploadOutcome, UploadError> {
     let tx = conn.transaction()?;
     let timestamp = now();
+    let draft_id = upload.draft_id;
+    let created = upload.created;
+    let version_id = upload.version_id;
+    let object_key = upload.object_key;
 
-    let existing: Option<(String, String)> = match &upload.draft_id {
-        Some(id) => tx
+    let existing_title: Option<String> = if created {
+        None
+    } else {
+        let title = tx
             .query_row(
-                "SELECT id, title FROM drafts WHERE id = ?1 AND deleted_at IS NULL",
-                params![id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                "SELECT title FROM drafts WHERE id = ?1 AND deleted_at IS NULL",
+                params![draft_id],
+                |row| row.get(0),
             )
-            .optional()?,
-        None => None,
-    };
-
-    if upload.draft_id.is_some() && existing.is_none() {
-        return Err(UploadError::DraftNotFound);
-    }
-
-    let (draft_id, created) = match &existing {
-        Some((id, _)) => (id.clone(), false),
-        None => (new_draft_id(), true),
+            .optional()?;
+        match title {
+            Some(title) => Some(title),
+            None => return Err(UploadError::DraftNotFound),
+        }
     };
 
     let version_number: i64 = if created {
@@ -259,24 +296,15 @@ pub fn record_upload(
     let title = upload
         .title_from_html
         .clone()
-        .or_else(|| existing.as_ref().map(|(_, t)| t.clone()))
+        .or(existing_title)
         .or_else(|| upload.filename.clone())
         .unwrap_or_else(|| "Untitled Draft".to_string());
 
-    let version_id = new_internal_id();
     let content_hash = keryx_core::sha256_hex(upload.html);
     let file_size = upload.html.len() as i64;
     let image_hosts_json = serde_json::to_string(upload.external_image_hosts)
         .map_err(|e| UploadError::Other(e.into()))?;
     let m = upload.metadata;
-
-    // Write the blob before the metadata commits: a failure here aborts the
-    // transaction, and a crash after it leaves only an orphan file, never a
-    // version row pointing at nothing.
-    let object_key = BlobStore::object_key(&draft_id, &version_id);
-    store
-        .put(&object_key, upload.html)
-        .map_err(UploadError::Other)?;
 
     if created {
         tx.execute(
@@ -1009,44 +1037,50 @@ mod tests {
         .unwrap()
     }
 
-    fn upload<'a>(
-        html: &'a str,
+    /// The whole upload sequence a caller performs, minus the blob write:
+    /// resolve the target, mint the ids and key, record the metadata.
+    fn record(
+        conn: &mut Connection,
+        html: &str,
         draft_id: Option<String>,
-        meta: &'a UploadMetadata,
-    ) -> NewUpload<'a> {
-        NewUpload {
-            html,
-            filename: Some("plan.html".into()),
-            draft_id,
-            description: None,
-            title_from_html: Some("Test".into()),
-            metadata: meta,
-            source_ip: None,
-            user_agent: None,
-            has_inline_script: false,
-            external_image_hosts: &[],
-        }
+        meta: &UploadMetadata,
+    ) -> Result<UploadOutcome, UploadError> {
+        let (draft_id, created) = resolve_upload_target(conn, draft_id)?;
+        let version_id = new_internal_id();
+        record_upload(
+            conn,
+            NewUpload {
+                html,
+                filename: Some("plan.html".into()),
+                object_key: format!("drafts/{draft_id}/{version_id}.html"),
+                draft_id,
+                created,
+                version_id,
+                description: None,
+                title_from_html: Some("Test".into()),
+                metadata: meta,
+                source_ip: None,
+                user_agent: None,
+                has_inline_script: false,
+                external_image_hosts: &[],
+            },
+        )
     }
 
     #[test]
     fn upload_versioning_and_delete_flow() {
         let mut conn = test_conn();
-        let store = keryx_store::test_store();
         let meta = UploadMetadata::default();
 
-        let first = record_upload(
-            &mut conn,
-            &store,
-            upload("<title>Test</title>v1", None, &meta),
-        )
-        .unwrap();
+        let first = record(&mut conn, "<title>Test</title>v1", None, &meta).unwrap();
         assert!(first.created);
         assert_eq!(first.version_number, 1);
 
-        let second = record_upload(
+        let second = record(
             &mut conn,
-            &store,
-            upload("<title>Test</title>v2", Some(first.draft_id.clone()), &meta),
+            "<title>Test</title>v2",
+            Some(first.draft_id.clone()),
+            &meta,
         )
         .unwrap();
         assert!(!second.created);
@@ -1056,12 +1090,16 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(current.version_number, 2);
-        assert!(store.get(&current.object_key).unwrap().ends_with("v2"));
+        assert!(current
+            .object_key
+            .ends_with(&format!("{}.html", second.version_id)));
 
         let v1 = find_public_version(&conn, &first.draft_id, Some(1))
             .unwrap()
             .unwrap();
-        assert!(store.get(&v1.object_key).unwrap().ends_with("v1"));
+        assert!(v1
+            .object_key
+            .ends_with(&format!("{}.html", first.version_id)));
 
         let drafts = list_drafts(&conn).unwrap();
         assert_eq!(drafts.len(), 1);
@@ -1072,26 +1110,19 @@ mod tests {
             .unwrap()
             .is_none());
         assert!(list_drafts(&conn).unwrap().is_empty());
-
-        std::fs::remove_dir_all(store.root()).ok();
     }
 
     #[test]
     fn purge_removes_rows_and_reports_blob_keys() {
         let mut conn = test_conn();
-        let store = keryx_store::test_store();
         let meta = UploadMetadata::default();
 
-        let first = record_upload(
+        let first = record(&mut conn, "<title>Test</title>v1", None, &meta).unwrap();
+        record(
             &mut conn,
-            &store,
-            upload("<title>Test</title>v1", None, &meta),
-        )
-        .unwrap();
-        record_upload(
-            &mut conn,
-            &store,
-            upload("<title>Test</title>v2", Some(first.draft_id.clone()), &meta),
+            "<title>Test</title>v2",
+            Some(first.draft_id.clone()),
+            &meta,
         )
         .unwrap();
 
@@ -1100,35 +1131,23 @@ mod tests {
         // Purge a live draft directly by id.
         let keys = purge_draft(&mut conn, &first.draft_id).unwrap().unwrap();
         assert_eq!(keys.len(), 2);
-        for key in &keys {
-            store.remove(key).unwrap();
-        }
         assert!(list_drafts(&conn).unwrap().is_empty());
         assert!(find_public_version(&conn, &first.draft_id, None)
             .unwrap()
             .is_none());
-        assert!(!store.root().join("drafts").join(&first.draft_id).exists());
 
         // Housekeeping purge collects soft-deleted drafts.
-        let second = record_upload(
-            &mut conn,
-            &store,
-            upload("<title>Test</title>x", None, &meta),
-        )
-        .unwrap();
+        let second = record(&mut conn, "<title>Test</title>x", None, &meta).unwrap();
         soft_delete_draft(&conn, &second.draft_id).unwrap();
         let (count, keys) = purge_deleted_drafts(&mut conn).unwrap();
         assert_eq!(count, 1);
         assert_eq!(keys.len(), 1);
         assert!(purge_draft(&mut conn, &second.draft_id).unwrap().is_none());
-
-        std::fs::remove_dir_all(store.root()).ok();
     }
 
     #[test]
     fn repository_and_branch_provenance_are_versioned() {
         let mut conn = test_conn();
-        let store = keryx_store::test_store();
         let first_meta = UploadMetadata {
             repo_org: Some("acme".into()),
             repo_name: Some("widgets".into()),
@@ -1144,20 +1163,12 @@ mod tests {
             ..UploadMetadata::default()
         };
 
-        let first = record_upload(
+        let first = record(&mut conn, "<title>Test</title>v1", None, &first_meta).unwrap();
+        record(
             &mut conn,
-            &store,
-            upload("<title>Test</title>v1", None, &first_meta),
-        )
-        .unwrap();
-        record_upload(
-            &mut conn,
-            &store,
-            upload(
-                "<title>Test</title>v2",
-                Some(first.draft_id.clone()),
-                &second_meta,
-            ),
+            "<title>Test</title>v2",
+            Some(first.draft_id.clone()),
+            &second_meta,
         )
         .unwrap();
 
@@ -1177,14 +1188,11 @@ mod tests {
         assert_eq!(versions[1].repo_host.as_deref(), Some("github.com"));
         assert_eq!(versions[1].repo_org.as_deref(), Some("acme"));
         assert_eq!(versions[1].git_branch.as_deref(), Some("main"));
-
-        std::fs::remove_dir_all(store.root()).ok();
     }
 
     #[test]
     fn latest_summary_does_not_inherit_repository_from_an_older_version() {
         let mut conn = test_conn();
-        let store = keryx_store::test_store();
         let recorded = UploadMetadata {
             repo_org: Some("acme".into()),
             repo_name: Some("widgets".into()),
@@ -1193,20 +1201,12 @@ mod tests {
             ..UploadMetadata::default()
         };
 
-        let first = record_upload(
+        let first = record(&mut conn, "<title>Test</title>v1", None, &recorded).unwrap();
+        record(
             &mut conn,
-            &store,
-            upload("<title>Test</title>v1", None, &recorded),
-        )
-        .unwrap();
-        record_upload(
-            &mut conn,
-            &store,
-            upload(
-                "<title>Test</title>v2",
-                Some(first.draft_id.clone()),
-                &UploadMetadata::default(),
-            ),
+            "<title>Test</title>v2",
+            Some(first.draft_id.clone()),
+            &UploadMetadata::default(),
         )
         .unwrap();
 
@@ -1215,8 +1215,6 @@ mod tests {
         assert_eq!(summary.repo_name, None);
         assert_eq!(summary.repo_host, None);
         assert_eq!(summary.latest_git_branch, None);
-
-        std::fs::remove_dir_all(store.root()).ok();
     }
 
     #[test]
@@ -1307,15 +1305,10 @@ mod tests {
     #[test]
     fn availability_transitions_are_exclusive_and_validated() {
         let mut conn = test_conn();
-        let store = keryx_store::test_store();
         let meta = UploadMetadata::default();
-        let draft_id = record_upload(
-            &mut conn,
-            &store,
-            upload("<title>Test</title>v1", None, &meta),
-        )
-        .unwrap()
-        .draft_id;
+        let draft_id = record(&mut conn, "<title>Test</title>v1", None, &meta)
+            .unwrap()
+            .draft_id;
 
         assert!(matches!(
             set_availability(&mut conn, "missing", &AvailabilityUpdate::Active),
@@ -1355,10 +1348,11 @@ mod tests {
 
         // A rejected transition leaves the previous state untouched, and a
         // new version never changes availability.
-        record_upload(
+        record(
             &mut conn,
-            &store,
-            upload("<title>Test</title>v2", Some(draft_id.clone()), &meta),
+            "<title>Test</title>v2",
+            Some(draft_id.clone()),
+            &meta,
         )
         .unwrap();
         let unchanged = get_draft_summary(&conn, &draft_id).unwrap().unwrap();
@@ -1394,8 +1388,6 @@ mod tests {
         assert!(!active.disabled);
         assert_eq!(active.snoozed_until, None);
         assert!(active.updated_at >= resnoozed.updated_at);
-
-        std::fs::remove_dir_all(store.root()).ok();
     }
 
     fn subscription(
@@ -1415,7 +1407,6 @@ mod tests {
     #[test]
     fn uploads_and_serving_changes_record_events_for_opted_in_subscriptions() {
         let mut conn = test_conn();
-        let store = keryx_store::test_store();
         let meta = UploadMetadata::default();
         let everything =
             upsert_push_subscription(&conn, &subscription("https://push.test/a", None)).unwrap();
@@ -1426,17 +1417,13 @@ mod tests {
         )
         .unwrap();
 
-        let first = record_upload(
-            &mut conn,
-            &store,
-            upload("<title>Test</title>v1", None, &meta),
-        )
-        .unwrap();
+        let first = record(&mut conn, "<title>Test</title>v1", None, &meta).unwrap();
         let draft_id = first.draft_id.clone();
-        record_upload(
+        record(
             &mut conn,
-            &store,
-            upload("<title>Test</title>v2", Some(draft_id.clone()), &meta),
+            "<title>Test</title>v2",
+            Some(draft_id.clone()),
+            &meta,
         )
         .unwrap();
         set_availability(
@@ -1516,18 +1503,16 @@ mod tests {
                 .len(),
             4
         );
-
-        std::fs::remove_dir_all(store.root()).ok();
     }
 
     #[test]
     fn a_due_snooze_wakes_exactly_once_without_touching_the_draft() {
         let mut conn = test_conn();
-        let store = keryx_store::test_store();
-        let draft_id = record_upload(
+        let draft_id = record(
             &mut conn,
-            &store,
-            upload("<title>Test</title>v1", None, &UploadMetadata::default()),
+            "<title>Test</title>v1",
+            None,
+            &UploadMetadata::default(),
         )
         .unwrap()
         .draft_id;
@@ -1575,18 +1560,55 @@ mod tests {
                 .count(),
             1
         );
+    }
 
-        std::fs::remove_dir_all(store.root()).ok();
+    #[test]
+    fn a_draft_purged_between_resolve_and_record_is_not_found() {
+        let mut conn = test_conn();
+        let meta = UploadMetadata::default();
+        let first = record(&mut conn, "<p>v1</p>", None, &meta).unwrap();
+
+        // The caller resolved the target, then the draft went away while the
+        // blob was being written.
+        let (draft_id, created) =
+            resolve_upload_target(&conn, Some(first.draft_id.clone())).unwrap();
+        assert!(!created);
+        purge_draft(&mut conn, &draft_id).unwrap().unwrap();
+
+        let version_id = new_internal_id();
+        let result = record_upload(
+            &mut conn,
+            NewUpload {
+                html: "<p>v2</p>",
+                filename: None,
+                object_key: format!("drafts/{draft_id}/{version_id}.html"),
+                draft_id: draft_id.clone(),
+                created,
+                version_id,
+                description: None,
+                title_from_html: None,
+                metadata: &meta,
+                source_ip: None,
+                user_agent: None,
+                has_inline_script: false,
+                external_image_hosts: &[],
+            },
+        );
+        assert!(matches!(result, Err(UploadError::DraftNotFound)));
+        let versions: i64 = conn
+            .query_row("SELECT COUNT(*) FROM draft_versions", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(versions, 0, "the rejected upload must leave no version row");
     }
 
     #[test]
     fn unknown_target_draft_is_not_found() {
         let mut conn = test_conn();
-        let store = keryx_store::test_store();
-        let result = record_upload(
+        let result = record(
             &mut conn,
-            &store,
-            upload("<p>x</p>", Some("nope".into()), &UploadMetadata::default()),
+            "<p>x</p>",
+            Some("nope".into()),
+            &UploadMetadata::default(),
         );
         assert!(matches!(result, Err(UploadError::DraftNotFound)));
     }
