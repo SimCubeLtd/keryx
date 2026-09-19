@@ -1,0 +1,18 @@
+[package]
+name = "keryx-config"
+description = "The Keryx config file: ~/.config/keryx/config.toml, the layer beneath environment variables and flags."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+config.workspace = true
+dirs.workspace = true
+serde.workspace = true
+toml_edit.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,0 +1,24 @@
+{
+  "draft_versions": [
+    "cli_version='0.1.0' content_hash='hash-live-1' created_at='2026-01-01T10:00:00.000Z' draft_id='livedraft001' external_image_hosts='[]' file_size=120 git_branch='main' git_commit_sha='aaa111' git_commit_subject='first' git_dirty=0 has_inline_script=0 id='verLive1aaaaaaaaaaaa' object_key='drafts/livedraft001/verLive1aaaaaaaaaaaa.html' original_filename='plan.html' repo_host=NULL repo_name=NULL repo_org=NULL source_ip='10.0.0.1' user_agent='keryx-cli/0.1.0' version_number=1",
+    "cli_version='0.2.0' content_hash='hash-live-2' created_at='2026-01-02T10:00:00.000Z' draft_id='livedraft001' external_image_hosts='[\"img.example.com\",\"cdn.example.org\"]' file_size=5000000000 git_branch='feat/x' git_commit_sha='bbb222' git_commit_subject='second' git_dirty=1 has_inline_script=1 id='verLive2aaaaaaaaaaaa' object_key='drafts/livedraft001/verLive2aaaaaaaaaaaa.html' original_filename='plan.html' repo_host='github.com' repo_name='keryx' repo_org='SimCubeLtd' source_ip='10.0.0.2' user_agent='keryx-cli/0.2.0' version_number=2",
+    "cli_version='0.3.0' content_hash='hash-disabled-1' created_at='2026-01-05T10:00:00.000Z' draft_id='disabled0001' external_image_hosts='[]' file_size=75 git_branch='main' git_commit_sha='ccc333' git_commit_subject='third' git_dirty=NULL has_inline_script=0 id='verDisabled1aaaaaaaa' object_key='drafts/disabled0001/verDisabled1aaaaaaaa.html' original_filename=NULL repo_host='gitlab.com' repo_name='widgets' repo_org='acme' source_ip='10.0.0.3' user_agent=NULL version_number=1",
+    "cli_version=NULL content_hash='hash-deleted-1' created_at='2026-01-03T10:00:00.000Z' draft_id='deleted00001' external_image_hosts='[]' file_size=50 git_branch=NULL git_commit_sha=NULL git_commit_subject=NULL git_dirty=NULL has_inline_script=0 id='verDeleted1aaaaaaaaa' object_key='drafts/deleted00001/verDeleted1aaaaaaaaa.html' original_filename=NULL repo_host=NULL repo_name=NULL repo_org=NULL source_ip=NULL user_agent=NULL version_number=1",
+    "cli_version=NULL content_hash='hash-snoozed-1' created_at='2026-01-07T10:00:00.000Z' draft_id='snoozed00001' external_image_hosts='[]' file_size=90 git_branch=NULL git_commit_sha=NULL git_commit_subject=NULL git_dirty=NULL has_inline_script=0 id='verSnoozed1aaaaaaaaa' object_key='drafts/snoozed00001/verSnoozed1aaaaaaaaa.html' original_filename=NULL repo_host='github.com' repo_name='synapse' repo_org='SimCubeLtd' source_ip=NULL user_agent=NULL version_number=1"
+  ],
+  "drafts": [
+    "created_at='2026-01-01T10:00:00.000Z' current_version_id='verLive2aaaaaaaaaaaa' deleted_at=NULL description='Two versions' disabled_at=NULL disabled_reason=NULL id='livedraft001' repo_host='github.com' repo_name='keryx' repo_org='SimCubeLtd' snoozed_until=NULL title='Live plan' updated_at='2026-01-02T10:00:00.000Z'",
+    "created_at='2026-01-03T10:00:00.000Z' current_version_id='verDeleted1aaaaaaaaa' deleted_at='2026-01-04T10:00:00.000Z' description=NULL disabled_at=NULL disabled_reason=NULL id='deleted00001' repo_host=NULL repo_name=NULL repo_org=NULL snoozed_until=NULL title='Deleted plan' updated_at='2026-01-03T10:00:00.000Z'",
+    "created_at='2026-01-05T10:00:00.000Z' current_version_id='verDisabled1aaaaaaaa' deleted_at=NULL description='Off for now' disabled_at='2026-01-06T10:00:00.000Z' disabled_reason='Superseded' id='disabled0001' repo_host='gitlab.com' repo_name='widgets' repo_org='acme' snoozed_until=NULL title='Disabled plan' updated_at='2026-01-05T10:00:00.000Z'",
+    "created_at='2026-01-07T10:00:00.000Z' current_version_id='verSnoozed1aaaaaaaaa' deleted_at=NULL description=NULL disabled_at=NULL disabled_reason=NULL id='snoozed00001' repo_host=NULL repo_name=NULL repo_org=NULL snoozed_until='2099-01-01T08:00:00.000Z' title='Snoozed plan' updated_at='2026-01-07T10:00:00.000Z'"
+  ],
+  "notification_deliveries": [
+    "attempts=2 event_key='published:livedraft001:verLive1aaaaaaaaaaaa' next_attempt_at='2026-01-08T12:00:00.000Z' subscription_id='subAaaaaaaaaaaaaaaaa'"
+  ],
+  "notification_events": [
+    "body='Published' created_at='2026-01-08T11:00:00.000Z' draft_id='livedraft001' key='published:livedraft001:verLive1aaaaaaaaaaaa' kind='published' target='/d/livedraft001' title='Live plan'"
+  ],
+  "push_subscriptions": [
+    "auth='auth-secret' created_at='2026-01-08T10:00:00.000Z' endpoint='https://push.example.com/send/abc' events='[\"published\",\"revised\"]' id='subAaaaaaaaaaaaaaaaa' p256dh='p256dh-key' updated_at='2026-01-08T10:00:00.000Z'"
+  ]
+}

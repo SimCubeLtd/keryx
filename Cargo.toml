@@ -1,38 +1,129 @@
-[package]
-name = "keryx"
-version = "0.5.1"
+[workspace]
+members = [".", "crates/*"]
+# Plain `cargo test` / `cargo clippy` must cover every crate, not only the
+# root binary, so CI and local habits keep working unchanged.
+default-members = [".", "crates/*"]
+resolver = "2"
+
+[workspace.package]
+version = "0.6.0"
 edition = "2021"
 license = "MIT"
-description = "Keryx (κῆρυξ): a self-hosted herald for agents — publish static HTML drafts via server, CLI, and TUI."
 repository = "https://github.com/SimCubeLtd/keryx"
 
-[dependencies]
+# Every dependency is declared once here, so no crate can drift onto another
+# version or feature set by accident. Crates opt in with `workspace = true`.
+[workspace.dependencies]
+keryx-client = { path = "crates/keryx-client" }
+keryx-config = { path = "crates/keryx-config" }
+keryx-core = { path = "crates/keryx-core" }
+keryx-db = { path = "crates/keryx-db" }
+keryx-policy = { path = "crates/keryx-policy" }
+keryx-render = { path = "crates/keryx-render" }
+keryx-server = { path = "crates/keryx-server" }
+keryx-share = { path = "crates/keryx-share" }
+keryx-store = { path = "crates/keryx-store" }
+
 anyhow = "1"
+async-trait = { version = "0.1", default-features = false }
 axum = "0.8"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
+# File layer only, TOML only: no json/yaml/ini parsers, no async, no env
+# source of its own (clap owns flags and environment variables).
+config = { version = "0.15", default-features = false, features = ["toml"] }
 crossterm = "0.29"
 dirs = "6"
+docker_credential = { version = "1.4", default-features = false }
 fulgur = "0.40"
 futures-util = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 hex = "0.4"
+# No TLS feature, deliberately: oci-client's rustls-tls switches on
+# reqwest/rustls and jsonwebtoken/aws_lc_rs, both of which hard-wire aws-lc-rs,
+# and native-tls means system OpenSSL. TLS arrives through Keryx's own reqwest.
+oci-client = { version = "0.17", default-features = false }
 open = "5"
+# OpenDAL is pinned: 0.59 has breaking changes against 0.58.2. The reqwest
+# transport's default feature would build the aws-lc-rs provider, so it takes
+# rustls-no-provider and the binary installs ring itself.
+opendal-core = { version = "=0.58.2", default-features = false, features = ["executors-tokio"] }
+opendal-http-transport-reqwest = { version = "=0.58.2", default-features = false, features = ["rustls-no-provider"] }
+opendal-service-fs = { version = "=0.58.2", default-features = false }
+opendal-service-s3 = { version = "=0.58.2", default-features = false }
 rand = "0.9"
 ratatui = "0.30"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
+reqsign-aws-v4 = { version = "=3.3.0", default-features = false }
+reqsign-core = { version = "=3.3.1", default-features = false }
+# rustls-no-provider keeps aws-lc-rs out of the build. main() installs the ring
+# provider before any HTTPS request is made.
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "query", "rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 scraper = "0.23"
+# Defaults off on both. Timestamps are TEXT, so chrono, time, uuid, decimal
+# and JSON column support stay out; sea-orm-migration's default cli feature
+# would pull clap, dotenvy and sea-orm-cli.
+sea-orm = { version = "=2.0.2", default-features = false, features = ["macros", "sqlx-sqlite", "sqlx-postgres", "runtime-tokio-rustls"] }
+sea-orm-migration = { version = "=2.0.2", default-features = false, features = ["sqlx-sqlite", "sqlx-postgres", "runtime-tokio-rustls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 tempfile = "3"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "net", "signal", "sync", "time"] }
+# Rewrites the config file in place without losing the user's comments.
+toml_edit = { version = "0.25", default-features = false, features = ["parse", "display"] }
 url = "2"
 usvg = { version = "0.45", default-features = false, features = ["text"] }
 web-push-native = "0.5"
 woff2-patched = "0.4"
 
+[package]
+name = "keryx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Keryx (κῆρυξ): a self-hosted herald for agents — publish static HTML drafts via server, CLI, and TUI."
+repository.workspace = true
+
+[features]
+default = ["s3", "share"]
+# S3-compatible blob storage. --no-default-features gives a lean, disk-only build.
+s3 = ["keryx-server/s3"]
+# keryx share / pull / inspect: drafts as OCI artifacts in any registry.
+share = ["dep:keryx-share"]
+
+[dependencies]
+keryx-client.workspace = true
+keryx-config.workspace = true
+keryx-core.workspace = true
+keryx-db.workspace = true
+keryx-policy.workspace = true
+keryx-server.workspace = true
+keryx-share = { workspace = true, optional = true }
+keryx-store.workspace = true
+
+anyhow.workspace = true
+chrono.workspace = true
+clap.workspace = true
+crossterm.workspace = true
+open.workspace = true
+ratatui.workspace = true
+rustls.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+reqwest.workspace = true
+tempfile.workspace = true
+
 [profile.release]
 lto = true
 strip = true
+
+# stylo 0.8.0 imports every derive_more macro with #[macro_use]. SeaORM enables
+# derive_more's "debug" feature, Cargo unifies it across the build, and every
+# #[derive(Debug)] in stylo then resolves to derive_more's and overflows. The
+# fork is the published 0.8.0 commit plus that one fix, pinned by revision.
+# Drop this once fulgur moves to a stylo release that carries the fix.
+[patch.crates-io]
+stylo = { git = "https://github.com/SimCubeLtd/stylo", rev = "f55507dea5e88ef1baca7219cbc878a1af3aab69" }

@@ -15,8 +15,8 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragra
 use ratatui::Frame;
 
 use crate::cli::time_ago;
-use crate::client::Api;
-use crate::types::{Availability, DraftDetail, DraftSummary};
+use keryx_client::Api;
+use keryx_core::types::{Availability, DraftDetail, DraftSummary};
 
 #[derive(Args, Debug)]
 pub struct TuiArgs {

@@ -1,0 +1,25 @@
+[package]
+name = "keryx-db"
+description = "Keryx metadata store: schema, upgrades and every query."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[features]
+# Exposes the in-memory store and row peeking to dependent crates' tests.
+test-support = []
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+keryx-core.workspace = true
+sea-orm.workspace = true
+sea-orm-migration.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio.workspace = true

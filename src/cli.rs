@@ -1,5 +1,5 @@
 //! CLI subcommands: upload, publish, list, raw, open, snooze, unsnooze,
-//! disable, enable, delete, and auth.
+//! disable, enable, delete, auth, and the offline storage maintenance pair.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -9,10 +9,13 @@ use chrono::{DateTime, Duration, Utc};
 use clap::{Args, Subcommand};
 use serde_json::json;
 
-use crate::client::{read_auth, save_credentials, Api, CliAuth, DraftMapping};
-use crate::gitmeta;
-use crate::policy::validate_html;
-use crate::types::{Availability, AvailabilityUpdate, DraftSummary};
+use keryx_client::gitmeta;
+use keryx_client::{read_auth, save_credentials, Api, CliAuth, DraftMapping};
+use keryx_core::types::{Availability, AvailabilityUpdate, DraftSummary};
+use keryx_db::DraftStore;
+use keryx_policy::validate_html;
+use keryx_server::{DatabaseArgs, S3Args, StorageKind};
+use keryx_store::{BlobBackend, BlobRef, MigrateOptions};
 
 #[derive(Args, Debug)]
 pub struct UploadArgs {
@@ -183,7 +186,7 @@ pub fn upload(args: UploadArgs) -> Result<()> {
         );
     }
 
-    let mut drafts = crate::client::read_drafts();
+    let mut drafts = keryx_client::read_drafts();
     let file_key = file.to_string_lossy().to_string();
     let known_draft_id = drafts.files.get(&file_key).map(|m| m.draft_id.clone());
     let draft_id = if args.new {
@@ -220,10 +223,10 @@ pub fn upload(args: UploadArgs) -> Result<()> {
             public_url: response.public_url.clone(),
             raw_url: response.raw_url.clone(),
             latest_version_number: response.version_number,
-            updated_at: crate::db::now(),
+            updated_at: keryx_core::now(),
         },
     );
-    crate::client::write_drafts(&drafts)?;
+    keryx_client::write_drafts(&drafts)?;
 
     println!(
         "{}",
@@ -361,7 +364,7 @@ pub fn parse_duration(value: &str) -> Result<Duration> {
 pub fn snooze(args: SnoozeArgs) -> Result<()> {
     let api = Api::from_args(args.api_url.as_deref())?;
     let until = match (&args.duration, &args.until) {
-        (Some(duration), _) => crate::db::format_timestamp(Utc::now() + parse_duration(duration)?),
+        (Some(duration), _) => keryx_core::format_timestamp(Utc::now() + parse_duration(duration)?),
         (None, Some(until)) => until.clone(),
         (None, None) => bail!("pass --for <duration> or --until <RFC3339>"),
     };
@@ -542,6 +545,195 @@ fn describe_span(seconds: i64) -> Option<String> {
         let amount = seconds / unit_seconds;
         (amount >= 1).then(|| format!("{amount} {name}{}", if amount == 1 { "" } else { "s" }))
     })
+}
+
+// --- offline storage maintenance ---------------------------------------------
+// Unlike every command above, these do not go through the HTTP API: they open
+// the database and the blob stores directly, and run with the server stopped.
+
+#[derive(Subcommand, Debug)]
+pub enum StorageCommand {
+    /// Copy every stored draft between blob stores, verifying each against
+    /// its recorded sha256. Re-run to resume; run with the server stopped
+    Migrate(StorageMigrateArgs),
+    /// Report stored objects that no draft version owns. Anything younger
+    /// than one hour is left alone
+    Gc(StorageGcArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct StorageLocationArgs {
+    #[command(flatten)]
+    pub database: DatabaseArgs,
+    /// Data directory holding the disk blob store (default: ~/.keryx)
+    #[arg(long, env = "KERYX_DATA_DIR")]
+    pub data_dir: Option<PathBuf>,
+    #[command(flatten)]
+    pub s3: S3Args,
+}
+
+#[derive(Args, Debug)]
+pub struct StorageMigrateArgs {
+    /// Blob store to copy from
+    #[arg(long, value_enum)]
+    pub from: StorageKind,
+    /// Blob store to copy to
+    #[arg(long, value_enum)]
+    pub to: StorageKind,
+    /// Report what would be copied without writing anything
+    #[arg(long)]
+    pub dry_run: bool,
+    /// Delete from the source once every key has copied and verified
+    #[arg(long)]
+    pub remove_source: bool,
+    /// Copies in flight at once
+    #[arg(long, default_value_t = 8)]
+    pub concurrency: usize,
+    #[command(flatten)]
+    pub location: StorageLocationArgs,
+}
+
+#[derive(Args, Debug)]
+pub struct StorageGcArgs {
+    /// Blob store to collect
+    #[arg(long, env = "KERYX_STORAGE", value_enum, default_value_t = StorageKind::Disk)]
+    pub storage: StorageKind,
+    /// Remove the orphans instead of only reporting them
+    #[arg(long)]
+    pub delete: bool,
+    #[command(flatten)]
+    pub location: StorageLocationArgs,
+}
+
+impl StorageLocationArgs {
+    /// Read through DraftStore rather than opening SQLite directly, so these
+    /// commands work on whatever database the server uses.
+    async fn blob_records(&self) -> Result<Vec<keryx_db::BlobRecord>> {
+        let config = self.database.config();
+        if let keryx_db::DatabaseConfig::Sqlite { path, .. } = &config {
+            if !path.exists() {
+                bail!("no database at {}", path.display());
+            }
+        }
+        let (store, _) = keryx_db::SeaOrmStore::open(&config).await?;
+        store.blob_records().await
+    }
+
+    async fn backend(&self, kind: StorageKind) -> Result<std::sync::Arc<dyn BlobBackend>> {
+        let data_dir = self
+            .data_dir
+            .clone()
+            .unwrap_or_else(keryx_server::default_state_dir);
+        keryx_store::create_backend(&self.s3.backend_config(kind, &data_dir)?).await
+    }
+}
+
+pub fn storage(command: StorageCommand) -> Result<()> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    match command {
+        StorageCommand::Migrate(args) => runtime.block_on(storage_migrate(args)),
+        StorageCommand::Gc(args) => runtime.block_on(storage_gc(args)),
+    }
+}
+
+async fn storage_migrate(args: StorageMigrateArgs) -> Result<()> {
+    if args.from == args.to {
+        bail!("--from and --to name the same store");
+    }
+    let refs = args
+        .location
+        .blob_records()
+        .await?
+        .into_iter()
+        .map(|record| BlobRef {
+            object_key: record.object_key,
+            content_hash: record.content_hash,
+            file_size: record.file_size as u64,
+        })
+        .collect::<Vec<_>>();
+    let from = args.location.backend(args.from).await?;
+    let to = args.location.backend(args.to).await?;
+    if !args.dry_run {
+        to.probe().await?;
+    }
+    println!(
+        "{} {} blobs: {} -> {}",
+        if args.dry_run {
+            "would migrate"
+        } else {
+            "migrating"
+        },
+        refs.len(),
+        from.describe(),
+        to.describe()
+    );
+
+    let report = keryx_store::migrate(
+        from,
+        to,
+        refs,
+        MigrateOptions {
+            dry_run: args.dry_run,
+            remove_source: args.remove_source,
+            concurrency: args.concurrency,
+        },
+    )
+    .await?;
+
+    for (key, reason) in &report.failed {
+        eprintln!("FAILED {key}: {reason}");
+    }
+    println!(
+        "{} {}, {} skipped, {} failed",
+        report.copied,
+        if args.dry_run { "to copy" } else { "copied" },
+        report.skipped,
+        report.failed.len()
+    );
+    if report.source_removed {
+        println!("source objects removed");
+    }
+    if !report.failed.is_empty() {
+        bail!(
+            "{} blobs failed to migrate; the source was left untouched",
+            report.failed.len()
+        );
+    }
+    Ok(())
+}
+
+async fn storage_gc(args: StorageGcArgs) -> Result<()> {
+    let owned = args
+        .location
+        .blob_records()
+        .await?
+        .into_iter()
+        .map(|record| record.object_key)
+        .collect();
+    let store = args.location.backend(args.storage).await?;
+    let report =
+        keryx_store::gc(&*store, &owned, args.delete, std::time::SystemTime::now()).await?;
+
+    for orphan in &report.orphans {
+        println!("{}\t{} bytes", orphan.key, orphan.size);
+    }
+    println!(
+        "{}: {} orphan{} {}, {} too young to judge",
+        store.describe(),
+        report.orphans.len(),
+        if report.orphans.len() == 1 { "" } else { "s" },
+        if report.deleted {
+            "removed"
+        } else if args.delete {
+            "to remove"
+        } else {
+            "found (re-run with --delete to remove)"
+        },
+        report.too_young
+    );
+    Ok(())
 }
 
 #[cfg(test)]
