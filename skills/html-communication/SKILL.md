@@ -119,6 +119,14 @@ revision is a new version of that draft, never a second draft.
   leaves two half-current copies at two URLs, which is worse than stopping.
 - Use `--new` only when the document is genuinely a different one.
 
+To hand a document to someone who cannot reach this Keryx server, share a
+version through an OCI registry, but only when the user asks and names the
+registry: `keryx share '<draft-id>' --to '<registry>/<repository>'`. It pushes
+the version as `<repository>/<draft-id>:v<n>` using the user's own registry
+login, and prints the reference plus the `oras pull` command the recipient
+runs. Sharing publishes the document outside this machine, so never do it
+unprompted.
+
 A plan stays live through implementation. Keep revising the same draft as
 reality changes it; do not open a second draft for implementation notes. Report
 the version number on every upload, and label the draft with `--description`
