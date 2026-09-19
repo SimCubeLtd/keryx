@@ -85,4 +85,27 @@ mod tests {
         assert_eq!(store.get(&key).unwrap(), "<p>hello</p>");
         std::fs::remove_dir_all(store.root()).ok();
     }
+
+    /// Proves the pinned OpenDAL stack compiles and links with ring as the
+    /// only TLS provider, before any storage logic depends on it.
+    #[cfg(feature = "s3")]
+    #[test]
+    fn opendal_s3_and_fs_operators_build() {
+        use opendal_core::{HttpTransporter, OperationContext, Operator};
+        use opendal_http_transport_reqwest::ReqwestTransport;
+
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let client = reqwest::Client::builder().build().unwrap();
+        let context = OperationContext::new()
+            .with_http_transport(HttpTransporter::new(ReqwestTransport::new(client)));
+        let s3 = opendal_service_s3::S3::default()
+            .bucket("keryx-link-proof")
+            .region("us-east-1");
+        let operator = Operator::new(s3).unwrap().with_context(context);
+        assert_eq!(operator.info().scheme().to_string(), "s3");
+
+        let root = std::env::temp_dir().join("keryx-tests");
+        let fs = opendal_service_fs::Fs::default().root(root.to_str().unwrap());
+        assert_eq!(Operator::new(fs).unwrap().info().scheme().to_string(), "fs");
+    }
 }

@@ -10,7 +10,27 @@ publish = false
 [features]
 # Exposes test_store() to the test suites of dependent crates.
 test-support = []
+# S3-compatible object storage through OpenDAL.
+s3 = [
+    "dep:opendal-http-transport-reqwest",
+    "dep:opendal-service-s3",
+    "dep:reqsign-aws-v4",
+    "dep:reqsign-core",
+    "dep:reqwest",
+]
 
 [dependencies]
 anyhow.workspace = true
+async-trait.workspace = true
 keryx-core.workspace = true
+opendal-core.workspace = true
+opendal-http-transport-reqwest = { workspace = true, optional = true }
+opendal-service-fs.workspace = true
+opendal-service-s3 = { workspace = true, optional = true }
+reqsign-aws-v4 = { workspace = true, optional = true }
+reqsign-core = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+tokio.workspace = true
+
+[dev-dependencies]
+rustls.workspace = true

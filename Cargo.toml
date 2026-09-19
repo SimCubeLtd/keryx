@@ -23,6 +23,7 @@ keryx-server = { path = "crates/keryx-server" }
 keryx-store = { path = "crates/keryx-store" }
 
 anyhow = "1"
+async-trait = { version = "0.1", default-features = false }
 axum = "0.8"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
@@ -33,8 +34,17 @@ fulgur = "0.40"
 futures-util = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 hex = "0.4"
 open = "5"
+# OpenDAL is pinned: 0.59 has breaking changes against 0.58.2. The reqwest
+# transport's default feature would build the aws-lc-rs provider, so it takes
+# rustls-no-provider and the binary installs ring itself.
+opendal-core = { version = "=0.58.2", default-features = false, features = ["executors-tokio"] }
+opendal-http-transport-reqwest = { version = "=0.58.2", default-features = false, features = ["rustls-no-provider"] }
+opendal-service-fs = { version = "=0.58.2", default-features = false }
+opendal-service-s3 = { version = "=0.58.2", default-features = false }
 rand = "0.9"
 ratatui = "0.30"
+reqsign-aws-v4 = { version = "=3.3.0", default-features = false }
+reqsign-core = { version = "=3.3.1", default-features = false }
 # rustls-no-provider keeps aws-lc-rs out of the build. main() installs the ring
 # provider before any HTTPS request is made.
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "query", "rustls-no-provider"] }
@@ -45,7 +55,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 tempfile = "3"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "net", "signal", "sync", "time"] }
 url = "2"
 usvg = { version = "0.45", default-features = false, features = ["text"] }
 web-push-native = "0.5"
@@ -58,6 +68,11 @@ edition.workspace = true
 license.workspace = true
 description = "Keryx (κῆρυξ): a self-hosted herald for agents — publish static HTML drafts via server, CLI, and TUI."
 repository.workspace = true
+
+[features]
+default = ["s3"]
+# S3-compatible blob storage. --no-default-features gives a lean, disk-only build.
+s3 = ["keryx-server/s3"]
 
 [dependencies]
 keryx-client.workspace = true

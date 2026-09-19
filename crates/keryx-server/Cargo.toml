@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+s3 = ["keryx-store/s3"]
+
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
