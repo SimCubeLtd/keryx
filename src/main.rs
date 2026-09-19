@@ -1,4 +1,6 @@
 mod cli;
+#[cfg(feature = "share")]
+mod share;
 mod tui;
 
 use clap::{Parser, Subcommand};
@@ -47,6 +49,15 @@ enum Command {
     },
     /// Browse drafts interactively
     Tui(tui::TuiArgs),
+    /// Share a draft version as an OCI artifact in any registry
+    #[cfg(feature = "share")]
+    Share(share::ShareArgs),
+    /// Pull a shared draft version into Keryx, or to a file with --output
+    #[cfg(feature = "share")]
+    Pull(share::PullArgs),
+    /// Show what a shared reference contains without downloading the document
+    #[cfg(feature = "share")]
+    Inspect(share::InspectArgs),
     /// Offline blob store maintenance: migrate between stores, collect orphans
     Storage {
         #[command(subcommand)]
@@ -76,6 +87,12 @@ fn main() {
         Command::Purge(args) => cli::purge(args),
         Command::Auth { command } => cli::auth(command),
         Command::Tui(args) => tui::run(args),
+        #[cfg(feature = "share")]
+        Command::Share(args) => share::share(args),
+        #[cfg(feature = "share")]
+        Command::Pull(args) => share::pull(args),
+        #[cfg(feature = "share")]
+        Command::Inspect(args) => share::inspect(args),
         Command::Storage { command } => cli::storage(command),
     };
 
