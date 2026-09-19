@@ -2930,9 +2930,12 @@ version = "0.5.1"
 dependencies = [
  "anyhow",
  "docker_credential",
+ "keryx-core",
  "oci-client",
  "reqwest",
  "rustls",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 

@@ -10,12 +10,15 @@ publish = false
 [dependencies]
 anyhow.workspace = true
 docker_credential.workspace = true
+keryx-core.workspace = true
 oci-client.workspace = true
 # oci-client calls reqwest's TLS builder methods unconditionally but is built
 # with neither of its own TLS features (both hard-wire aws-lc-rs or OpenSSL).
 # Declaring reqwest with rustls-no-provider here makes that compile on ring
 # without relying on some other crate to switch the feature on.
 reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
