@@ -1,0 +1,19 @@
+[package]
+name = "keryx-client"
+description = "Keryx HTTP client and git provenance capture."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+dirs.workspace = true
+keryx-core.workspace = true
+keryx-policy.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+url.workspace = true

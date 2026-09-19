@@ -9,8 +9,10 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::policy::PolicyOptions;
-use crate::types::{AvailabilityUpdate, DraftDetail, DraftSummary, UploadResponse};
+pub mod gitmeta;
+
+use keryx_core::types::{AvailabilityUpdate, DraftDetail, DraftSummary, UploadResponse};
+use keryx_policy::PolicyOptions;
 
 pub const DEFAULT_API_URL: &str = "http://localhost:7812";
 

@@ -2545,6 +2545,7 @@ dependencies = [
  "fulgur",
  "futures-util",
  "hex",
+ "keryx-client",
  "keryx-core",
  "keryx-db",
  "keryx-policy",
@@ -2565,6 +2566,21 @@ dependencies = [
  "usvg",
  "web-push-native",
  "woff2-patched",
+]
+
+[[package]]
+name = "keryx-client"
+version = "0.5.1"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "keryx-core",
+ "keryx-policy",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "url",
 ]
 
 [[package]]

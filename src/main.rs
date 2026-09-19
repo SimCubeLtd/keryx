@@ -1,9 +1,9 @@
 mod cli;
-mod client;
-mod gitmeta;
 mod tui;
 
 use clap::{Parser, Subcommand};
+use keryx_client as client;
+use keryx_client::gitmeta;
 use keryx_core::types;
 use keryx_policy as policy;
 use keryx_server as server;

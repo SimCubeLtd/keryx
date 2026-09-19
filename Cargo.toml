@@ -14,6 +14,7 @@ repository = "https://github.com/SimCubeLtd/keryx"
 # Every dependency is declared once here, so no crate can drift onto another
 # version or feature set by accident. Crates opt in with `workspace = true`.
 [workspace.dependencies]
+keryx-client = { path = "crates/keryx-client" }
 keryx-core = { path = "crates/keryx-core" }
 keryx-db = { path = "crates/keryx-db" }
 keryx-policy = { path = "crates/keryx-policy" }
@@ -56,6 +57,7 @@ description = "Keryx (κῆρυξ): a self-hosted herald for agents — publish 
 repository.workspace = true
 
 [dependencies]
+keryx-client.workspace = true
 keryx-core.workspace = true
 keryx-db.workspace = true
 keryx-policy.workspace = true

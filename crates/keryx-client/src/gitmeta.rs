@@ -4,7 +4,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use crate::types::UploadMetadata;
+use keryx_core::types::UploadMetadata;
 
 pub fn collect(cwd: &Path) -> UploadMetadata {
     let repo_root = git(&["rev-parse", "--show-toplevel"], cwd);
