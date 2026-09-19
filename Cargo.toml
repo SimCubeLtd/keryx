@@ -35,8 +35,11 @@ hex = "0.4"
 open = "5"
 rand = "0.9"
 ratatui = "0.30"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+# rustls-no-provider keeps aws-lc-rs out of the build. main() installs the ring
+# provider before any HTTPS request is made.
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "query", "rustls-no-provider"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 scraper = "0.23"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -68,6 +71,7 @@ clap.workspace = true
 crossterm.workspace = true
 open.workspace = true
 ratatui.workspace = true
+rustls.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]

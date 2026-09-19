@@ -52,6 +52,9 @@ fn wait_until_ready(base_url: &str) {
 
 #[test]
 fn upload_captures_the_invocation_checkout_when_html_is_elsewhere() {
+    // This test process makes its own reqwest calls, and reqwest is built with
+    // rustls-no-provider, so it needs the same install main() does.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let temp = TempDir::new().unwrap();
     let repo = temp.path().join("workspace");
     let client_home = temp.path().join("home");

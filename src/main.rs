@@ -50,6 +50,11 @@ enum Command {
 }
 
 fn main() {
+    // reqwest is built with rustls-no-provider, so an HTTPS request made before
+    // this install panics. Process-wide and done once, here, because the CLI
+    // makes HTTPS requests too, not only the server.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let cli = Cli::parse();
     let result = match cli.command {
         Command::Serve(args) => keryx_server::run(args),
