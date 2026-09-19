@@ -32,6 +32,7 @@ url.workspace = true
 web-push-native.workspace = true
 
 [dev-dependencies]
+async-trait.workspace = true
 keryx-db = { workspace = true, features = ["test-support"] }
 keryx-store = { workspace = true, features = ["test-support"] }
 rand.workspace = true

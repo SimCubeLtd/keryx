@@ -313,6 +313,23 @@ mod tests {
         assert_eq!(describe(&config("")), "s3://keryx-plans");
     }
 
+    #[tokio::test]
+    async fn startup_probe_names_the_store_when_the_endpoint_is_unreachable() {
+        // Port 9 (discard) on loopback refuses the connection immediately.
+        let backend = crate::create_backend(&crate::BackendConfig::S3(config("prod")))
+            .await
+            .unwrap();
+        // Static credentials keep the probe off the credential chain's network
+        // lookups; the failure under test is the endpoint.
+        std::env::set_var("AWS_ACCESS_KEY_ID", "probe-test");
+        std::env::set_var("AWS_SECRET_ACCESS_KEY", "probe-test");
+        let error = backend.probe().await.unwrap_err();
+        assert!(
+            format!("{error:#}").contains("s3://keryx-plans/prod is not writable"),
+            "unreadable probe error: {error:#}"
+        );
+    }
+
     #[test]
     fn credential_command_relexing_restores_quoted_grouping() {
         let (program, args) =

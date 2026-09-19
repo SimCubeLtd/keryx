@@ -36,7 +36,13 @@ use keryx_render::pdf::{render_version_pdf, PdfIdentity};
 use keryx_render::{
     render_dashboard, render_dashboard_detail, render_dashboard_rows, render_not_found,
 };
-use keryx_store::BlobStore;
+use keryx_store::{create_backend, object_key, BackendConfig, BlobBackend, DiskConfig, S3Config};
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StorageKind {
+    Disk,
+    S3,
+}
 
 #[derive(clap::Args, Debug)]
 pub struct ServeArgs {
@@ -52,9 +58,37 @@ pub struct ServeArgs {
     #[arg(long, env = "KERYX_DB")]
     pub db: Option<PathBuf>,
 
-    /// Directory for stored HTML files (default: ~/.keryx)
+    /// Directory for local state: the push identity, the blob staging area,
+    /// and the stored HTML files when --storage is disk (default: ~/.keryx)
     #[arg(long, env = "KERYX_DATA_DIR")]
     pub data_dir: Option<PathBuf>,
+
+    /// Where draft HTML is stored. The --s3-* flags are ignored unless this
+    /// is s3
+    #[arg(long, env = "KERYX_STORAGE", value_enum, default_value_t = StorageKind::Disk)]
+    pub storage: StorageKind,
+
+    /// S3 bucket; required when --storage is s3. Credentials never come from
+    /// Keryx flags: they resolve through the standard AWS chain
+    #[arg(long, env = "KERYX_S3_BUCKET")]
+    pub s3_bucket: Option<String>,
+
+    /// S3 region, or the placeholder most S3-compatible endpoints accept
+    #[arg(long, env = "KERYX_S3_REGION", default_value = "us-east-1")]
+    pub s3_region: String,
+
+    /// Custom S3 endpoint for RustFS, MinIO, Ceph RGW, R2 or B2
+    /// (default: AWS_ENDPOINT_URL_S3, then AWS)
+    #[arg(long, env = "KERYX_S3_ENDPOINT")]
+    pub s3_endpoint: Option<String>,
+
+    /// Key prefix inside the bucket
+    #[arg(long, env = "KERYX_S3_PREFIX", default_value = "")]
+    pub s3_prefix: String,
+
+    /// Named AWS profile for credential lookup
+    #[arg(long, env = "KERYX_S3_PROFILE")]
+    pub s3_profile: Option<String>,
 
     /// Base URL used in returned links, e.g. http://myhost:7812
     /// (default: derived from each request's Host header)
@@ -93,6 +127,26 @@ pub struct ServeArgs {
 }
 
 impl ServeArgs {
+    /// The blob backend these flags select.
+    fn backend_config(&self, data_dir: &std::path::Path) -> Result<BackendConfig> {
+        Ok(match self.storage {
+            StorageKind::Disk => BackendConfig::Disk(DiskConfig {
+                data_dir: data_dir.to_path_buf(),
+            }),
+            StorageKind::S3 => BackendConfig::S3(S3Config {
+                bucket: self
+                    .s3_bucket
+                    .clone()
+                    .filter(|bucket| !bucket.trim().is_empty())
+                    .context("--storage s3 needs --s3-bucket (or KERYX_S3_BUCKET)")?,
+                region: self.s3_region.clone(),
+                endpoint: self.s3_endpoint.clone(),
+                prefix: self.s3_prefix.clone(),
+                profile: self.s3_profile.clone(),
+            }),
+        })
+    }
+
     fn policy(&self) -> PolicyOptions {
         PolicyOptions {
             max_html_bytes: self.max_html_bytes,
@@ -105,7 +159,7 @@ impl ServeArgs {
 
 struct AppState {
     db: Arc<Mutex<Connection>>,
-    store: BlobStore,
+    store: Arc<dyn BlobBackend>,
     public_base_url: Option<String>,
     api_key_hash: Option<String>,
     policy: PolicyOptions,
@@ -140,32 +194,45 @@ pub fn run(args: ServeArgs) -> Result<()> {
         .clone()
         .unwrap_or_else(|| notifications::default_contact(public_base_url.as_deref()));
 
-    let state: SharedState = Arc::new(AppState {
-        db: Arc::new(Mutex::new(conn)),
-        store: BlobStore::new(data_dir.clone()),
-        public_base_url,
-        api_key_hash: args.api_key.as_deref().map(keryx_core::sha256_hex),
-        policy: args.policy(),
-        csp: draft_csp(&args.policy()),
-        push: Arc::new(PushHub::new(vapid, push_contact)),
-        dashboard_updates: DashboardUpdates::new(),
-    });
-    let blob_root = state.store.root().join("drafts");
-    let dispatcher_db = state.db.clone();
-    let dispatcher_hub = state.push.clone();
-    let dashboard_updates = state.dashboard_updates.clone();
-
-    let app = build_router(state, args.max_html_bytes);
+    let backend_config = args.backend_config(&data_dir)?;
+    let api_key_hash = args.api_key.as_deref().map(keryx_core::sha256_hex);
+    let policy = args.policy();
 
     let addr = format!("{}:{}", args.host, args.port);
     let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(async move {
+        // Fail fast: a misconfigured object store must stop the boot, not
+        // surface as a 500 on the first upload of the day.
+        let store = create_backend(&backend_config).await?;
+        let probe_started = std::time::Instant::now();
+        store
+            .probe()
+            .await
+            .with_context(|| format!("blob store startup probe failed for {}", store.describe()))?;
+        let probe_ms = probe_started.elapsed().as_millis();
+        let blob_description = store.describe().to_string();
+
+        let state: SharedState = Arc::new(AppState {
+            db: Arc::new(Mutex::new(conn)),
+            store,
+            public_base_url,
+            api_key_hash,
+            csp: draft_csp(&policy),
+            policy,
+            push: Arc::new(PushHub::new(vapid, push_contact)),
+            dashboard_updates: DashboardUpdates::new(),
+        });
+        let dispatcher_db = state.db.clone();
+        let dispatcher_hub = state.push.clone();
+        let dashboard_updates = state.dashboard_updates.clone();
+        let app = build_router(state, args.max_html_bytes);
+
         let listener = tokio::net::TcpListener::bind(&addr)
             .await
             .with_context(|| format!("binding {addr}"))?;
         println!("keryx serving on http://{addr}");
         println!("database: {}", db_path.display());
-        println!("blobs: {}", blob_root.display());
+        println!("blobs: {blob_description} (probe ok, {probe_ms} ms)");
         println!(
             "policy: max {} bytes{}{}",
             args.max_html_bytes,
@@ -529,10 +596,10 @@ async fn upload(
         Err(UploadError::Other(error)) => return internal_error(error),
     };
     let version_id = new_internal_id();
-    let object_key = BlobStore::object_key(&draft_id, &version_id);
+    let object_key = object_key(&draft_id, &version_id);
 
     // 2. The blob lands before the metadata commits, with no transaction open.
-    if let Err(error) = state.store.put(&object_key, &html) {
+    if let Err(error) = state.store.put(&object_key, &html).await {
         return internal_error(error);
     }
 
@@ -559,9 +626,7 @@ async fn upload(
     if outcome.is_err() {
         // The draft went away mid-upload, or the record step failed: the blob
         // has no row. Best effort; anything that slips through is an orphan.
-        if let Err(error) = state.store.remove(&object_key) {
-            eprintln!("upload: failed to remove orphan blob {object_key}: {error:#}");
-        }
+        remove_blobs(&state, std::slice::from_ref(&object_key)).await;
     }
 
     match outcome {
@@ -665,8 +730,10 @@ async fn publish_pdf(
         Ok(None) => return json_error(StatusCode::NOT_FOUND, "Draft version not found."),
         Err(error) => return internal_error(error),
     };
-    let html = match state.store.get(&served.object_key) {
-        Ok(html) => html,
+    let html = match state.store.get(&served.object_key).await {
+        Ok(Some(html)) => html,
+        // A row whose blob is gone, e.g. a database rewound past a purge.
+        Ok(None) => return json_error(StatusCode::NOT_FOUND, "Draft version not found."),
         Err(error) => return internal_error(error),
     };
 
@@ -751,7 +818,7 @@ async fn delete_draft(
         return match result {
             Ok(Some(keys)) => {
                 state.dashboard_updates.changed();
-                remove_blobs(&state, &keys);
+                remove_blobs(&state, &keys).await;
                 Json(json!({ "ok": true, "purged": true })).into_response()
             }
             Ok(None) => json_error(StatusCode::NOT_FOUND, "Draft not found."),
@@ -787,20 +854,23 @@ async fn purge_deleted(State(state): State<SharedState>, headers: HeaderMap) -> 
             if count > 0 {
                 state.dashboard_updates.changed();
             }
-            remove_blobs(&state, &keys);
+            remove_blobs(&state, &keys).await;
             Json(json!({ "ok": true, "purgedDrafts": count })).into_response()
         }
         Err(error) => internal_error(error),
     }
 }
 
-/// The rows are already gone when this runs, so a failed file removal only
-/// leaves an orphan blob — log it rather than failing the request.
-fn remove_blobs(state: &AppState, keys: &[String]) {
-    for key in keys {
-        if let Err(error) = state.store.remove(key) {
-            eprintln!("purge: failed to remove blob {key}: {error:#}");
-        }
+/// The rows are already gone when this runs, so a failed removal only leaves
+/// orphan blobs for `keryx storage gc`: log it rather than failing the
+/// request. One `remove_many` call, because a purge can report thousands of
+/// keys and S3 deletes them in batches.
+async fn remove_blobs(state: &AppState, keys: &[String]) {
+    if keys.is_empty() {
+        return;
+    }
+    if let Err(error) = state.store.remove_many(keys).await {
+        eprintln!("failed to remove {} blobs: {error:#}", keys.len());
     }
 }
 
@@ -886,7 +956,7 @@ fn apply_availability(
 }
 
 async fn serve_current(State(state): State<SharedState>, Path(draft_id): Path<String>) -> Response {
-    serve_draft(&state, &draft_id, None)
+    serve_draft(&state, &draft_id, None).await
 }
 
 async fn serve_version(
@@ -899,22 +969,24 @@ async fn serve_version(
     if version_number < 1 {
         return not_found().await;
     }
-    serve_draft(&state, &draft_id, Some(version_number))
+    serve_draft(&state, &draft_id, Some(version_number)).await
 }
 
 /// Serve the exact uploaded HTML, byte for byte, to every client — browsers,
 /// curl, and agent fetchers alike. No browser detection, no wrapper page. The
 /// CSP never changes the bytes a client reads; it only constrains what the
 /// page may do if a human opens it in a browser.
-fn serve_draft(state: &AppState, draft_id: &str, version: Option<i64>) -> Response {
+async fn serve_draft(state: &AppState, draft_id: &str, version: Option<i64>) -> Response {
     let found = {
         let conn = state.db.lock().unwrap();
         db::find_public_version(&conn, draft_id, version)
     };
     match found {
         Ok(Some(served)) => {
-            let html = match state.store.get(&served.object_key) {
-                Ok(html) => html,
+            let html = match state.store.get(&served.object_key).await {
+                Ok(Some(html)) => html,
+                // A row whose blob is gone, e.g. a database rewound past a purge.
+                Ok(None) => return not_found().await,
                 Err(error) => return internal_error(error),
             };
             let mut response = Html(html).into_response();
@@ -1058,17 +1130,20 @@ mod tests {
     use axum::body::to_bytes;
 
     /// Store the blob and record its metadata, as the upload handler does.
-    fn record(
+    async fn record(
         state: &AppState,
         html: &str,
         draft_id: Option<String>,
         metadata: &UploadMetadata,
     ) -> db::UploadOutcome {
-        let mut conn = state.db.lock().unwrap();
-        let (draft_id, created) = db::resolve_upload_target(&conn, draft_id).unwrap();
+        let (draft_id, created) = {
+            let conn = state.db.lock().unwrap();
+            db::resolve_upload_target(&conn, draft_id).unwrap()
+        };
         let version_id = new_internal_id();
-        let object_key = BlobStore::object_key(&draft_id, &version_id);
-        state.store.put(&object_key, html).unwrap();
+        let object_key = object_key(&draft_id, &version_id);
+        state.store.put(&object_key, html).await.unwrap();
+        let mut conn = state.db.lock().unwrap();
         db::record_upload(
             &mut conn,
             NewUpload {
@@ -1090,10 +1165,15 @@ mod tests {
         .unwrap()
     }
 
-    /// A protected server (API key "secret") on a throwaway store.
+    /// A protected server (API key "secret") on an in-memory store.
     fn test_state() -> SharedState {
-        let store = keryx_store::test_store();
-        let conn = db::open(&store.root().join("test.db")).unwrap();
+        test_state_with(keryx_store::memory_backend())
+    }
+
+    fn test_state_with(store: Arc<dyn BlobBackend>) -> SharedState {
+        let conn = db::test_connection();
+        // db::open turns this on for a real database; purge relies on it.
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
         Arc::new(AppState {
             db: Arc::new(Mutex::new(conn)),
             store,
@@ -1130,20 +1210,6 @@ mod tests {
         assert!(open.contains("connect-src 'none'"));
     }
 
-    fn contains_pdf(path: &std::path::Path) -> bool {
-        let Ok(entries) = std::fs::read_dir(path) else {
-            return false;
-        };
-        entries.filter_map(std::result::Result::ok).any(|entry| {
-            let path = entry.path();
-            if path.is_dir() {
-                contains_pdf(&path)
-            } else {
-                path.extension().is_some_and(|extension| extension == "pdf")
-            }
-        })
-    }
-
     #[tokio::test]
     async fn pdf_endpoint_is_authenticated_versioned_and_ephemeral() {
         let state = test_state();
@@ -1154,13 +1220,15 @@ mod tests {
                 "<!doctype html><title>v1</title><h1>First</h1>",
                 None,
                 &metadata,
-            );
+            )
+            .await;
             record(
                 &state,
                 "<!doctype html><title>v2</title><h1>Latest</h1>",
                 Some(first.draft_id.clone()),
                 &metadata,
-            );
+            )
+            .await;
             first.draft_id
         };
 
@@ -1225,9 +1293,8 @@ mod tests {
         assert_eq!(explicit.headers()["x-keryx-draft-version"], "1");
 
         assert_eq!(counts(&state), before);
-        assert!(!contains_pdf(state.store.root()));
-
-        std::fs::remove_dir_all(state.store.root()).ok();
+        let stored = state.store.list("").await.unwrap();
+        assert!(stored.iter().all(|entry| !entry.key.ends_with(".pdf")));
     }
 
     #[test]
@@ -1269,7 +1336,8 @@ mod tests {
                 "<!doctype html><title>Realtime</title><h1>Realtime</h1>",
                 None,
                 &metadata,
-            );
+            )
+            .await;
         }
 
         let snapshot = dashboard_snapshot(
@@ -1293,8 +1361,6 @@ mod tests {
             events.headers()[header::CONTENT_TYPE],
             HeaderValue::from_static("text/event-stream")
         );
-
-        std::fs::remove_dir_all(state.store.root()).ok();
     }
 
     async fn json_body(response: Response) -> serde_json::Value {
@@ -1353,8 +1419,6 @@ mod tests {
         )
         .await;
         assert_eq!(json_body(removed).await["removed"], true);
-
-        std::fs::remove_dir_all(state.store.root()).ok();
     }
 
     #[tokio::test]
@@ -1369,6 +1433,7 @@ mod tests {
                 None,
                 &metadata,
             )
+            .await
             .draft_id
         };
         let mut headers = HeaderMap::new();
@@ -1430,11 +1495,11 @@ mod tests {
             format!("https://keryx.test/d/{draft_id}")
         );
         assert_eq!(
-            serve_draft(&state, &draft_id, None).status(),
+            serve_draft(&state, &draft_id, None).await.status(),
             StatusCode::OK
         );
         assert_eq!(
-            serve_draft(&state, &draft_id, Some(1)).status(),
+            serve_draft(&state, &draft_id, Some(1)).await.status(),
             StatusCode::OK
         );
 
@@ -1452,7 +1517,7 @@ mod tests {
         assert_eq!(body["draft"]["disabled"], true);
         assert!(body["draft"]["snoozedUntil"].is_null());
         assert_eq!(
-            serve_draft(&state, &draft_id, None).status(),
+            serve_draft(&state, &draft_id, None).await.status(),
             StatusCode::NOT_FOUND
         );
         let reason: String = state
@@ -1476,10 +1541,200 @@ mod tests {
         .await;
         assert_eq!(enabled.status(), StatusCode::OK);
         assert_eq!(
-            serve_draft(&state, &draft_id, None).status(),
+            serve_draft(&state, &draft_id, None).await.status(),
             StatusCode::OK
         );
+    }
 
-        std::fs::remove_dir_all(state.store.root()).ok();
+    /// A backend whose failures and side effects a test scripts, over a real
+    /// in-memory store.
+    #[derive(Default)]
+    struct ScriptedBackend {
+        inner: Option<Arc<dyn BlobBackend>>,
+        fail_put: bool,
+        fail_remove: bool,
+        /// Runs once, after a successful put: the window in which a draft can
+        /// vanish between resolve and record.
+        after_put: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+        removed: Mutex<Vec<Vec<String>>>,
+    }
+
+    impl ScriptedBackend {
+        fn new() -> Self {
+            Self {
+                inner: Some(keryx_store::memory_backend()),
+                ..Self::default()
+            }
+        }
+
+        fn inner(&self) -> &Arc<dyn BlobBackend> {
+            self.inner.as_ref().unwrap()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl BlobBackend for ScriptedBackend {
+        async fn put(&self, key: &str, html: &str) -> Result<()> {
+            if self.fail_put {
+                anyhow::bail!("scripted put failure");
+            }
+            self.inner().put(key, html).await?;
+            if let Some(hook) = self.after_put.lock().unwrap().take() {
+                hook();
+            }
+            Ok(())
+        }
+        async fn get(&self, key: &str) -> Result<Option<String>> {
+            self.inner().get(key).await
+        }
+        async fn remove_many(&self, keys: &[String]) -> Result<()> {
+            self.removed.lock().unwrap().push(keys.to_vec());
+            if self.fail_remove {
+                anyhow::bail!("scripted remove failure");
+            }
+            self.inner().remove_many(keys).await
+        }
+        async fn list(&self, prefix: &str) -> Result<Vec<keryx_store::BlobEntry>> {
+            self.inner().list(prefix).await
+        }
+        async fn probe(&self) -> Result<()> {
+            Ok(())
+        }
+        fn describe(&self) -> &str {
+            "scripted://"
+        }
+    }
+
+    fn bearer() -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer secret"),
+        );
+        headers
+    }
+
+    async fn post_upload(state: &SharedState, draft_id: Option<&str>) -> Response {
+        let body: UploadBody = serde_json::from_value(json!({
+            "html": "<!doctype html><title>Upload</title><h1>Upload</h1>",
+            "draftId": draft_id,
+        }))
+        .unwrap();
+        upload(
+            State(state.clone()),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 4000))),
+            bearer(),
+            Json(body),
+        )
+        .await
+    }
+
+    fn row_count(state: &AppState, table: &str) -> i64 {
+        let conn = state.db.lock().unwrap();
+        conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+            row.get(0)
+        })
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_failed_blob_put_leaves_no_draft_or_version_row() {
+        let state = test_state_with(Arc::new(ScriptedBackend {
+            fail_put: true,
+            ..ScriptedBackend::new()
+        }));
+
+        let response = post_upload(&state, None).await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(row_count(&state, "drafts"), 0);
+        assert_eq!(row_count(&state, "draft_versions"), 0);
+    }
+
+    #[tokio::test]
+    async fn an_upload_to_a_draft_purged_mid_flight_fails_cleanly_and_removes_its_blob() {
+        let backend = Arc::new(ScriptedBackend::new());
+        let state = test_state_with(backend.clone());
+        let draft_id = record(&state, "<p>v1</p>", None, &UploadMetadata::default())
+            .await
+            .draft_id;
+        // Arm a purge to run between the blob put and the record step.
+        let (db, id) = (state.db.clone(), draft_id.clone());
+        *backend.after_put.lock().unwrap() = Some(Box::new(move || {
+            db::purge_draft(&mut db.lock().unwrap(), &id)
+                .unwrap()
+                .unwrap();
+        }));
+
+        let response = post_upload(&state, Some(&draft_id)).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(row_count(&state, "draft_versions"), 0);
+
+        // The handler removed exactly the blob it had just written.
+        let removed = backend.removed.lock().unwrap().clone();
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].len(), 1);
+        assert!(removed[0][0].starts_with(&format!("drafts/{draft_id}/")));
+        assert_eq!(backend.get(&removed[0][0]).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn purge_removes_exactly_the_reported_keys_and_survives_a_removal_failure() {
+        let backend = Arc::new(ScriptedBackend {
+            fail_remove: true,
+            ..ScriptedBackend::new()
+        });
+        let state = test_state_with(backend.clone());
+        let metadata = UploadMetadata::default();
+        let first = record(&state, "<p>v1</p>", None, &metadata).await;
+        record(&state, "<p>v2</p>", Some(first.draft_id.clone()), &metadata).await;
+        let mut expected: Vec<String> = {
+            let conn = state.db.lock().unwrap();
+            let mut statement = conn
+                .prepare("SELECT object_key FROM draft_versions")
+                .unwrap();
+            let keys = statement.query_map([], |row| row.get(0)).unwrap();
+            keys.collect::<Result<_, _>>().unwrap()
+        };
+        expected.sort();
+
+        let response = delete_draft(
+            State(state.clone()),
+            Path(first.draft_id.clone()),
+            Query(serde_json::from_value(json!({ "purge": true })).unwrap()),
+            bearer(),
+        )
+        .await;
+        // The rows are gone, so the failed removal is logged, not fatal.
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let mut removed = backend.removed.lock().unwrap().clone();
+        assert_eq!(removed.len(), 1, "one remove_many call, not one per key");
+        removed[0].sort();
+        assert_eq!(removed[0], expected);
+    }
+
+    #[tokio::test]
+    async fn a_version_whose_blob_is_missing_serves_not_found() {
+        let state = test_state();
+        let outcome = record(&state, "<p>v1</p>", None, &UploadMetadata::default()).await;
+        let served = {
+            let conn = state.db.lock().unwrap();
+            db::find_public_version(&conn, &outcome.draft_id, None)
+                .unwrap()
+                .unwrap()
+        };
+        state.store.remove_many(&[served.object_key]).await.unwrap();
+
+        let response = serve_draft(&state, &outcome.draft_id, None).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let response = publish_pdf(
+            State(state.clone()),
+            Path(outcome.draft_id.clone()),
+            Query(serde_json::from_value(json!({})).unwrap()),
+            bearer(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }

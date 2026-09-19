@@ -2798,6 +2798,7 @@ name = "keryx-server"
 version = "0.5.1"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "base64 0.22.1",
  "chrono",
