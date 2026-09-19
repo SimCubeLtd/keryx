@@ -147,10 +147,6 @@ criteria = "safe-to-deploy"
 version = "0.6.7"
 criteria = "safe-to-deploy"
 
-[[exemptions.atoi]]
-version = "2.0.0"
-criteria = "safe-to-deploy"
-
 [[exemptions.atomic_refcell]]
 version = "0.1.14"
 criteria = "safe-to-deploy"
@@ -517,10 +513,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.dlv-list]]
 version = "0.5.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.docker_credential]]
-version = "1.4.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.dotenvy]]
@@ -1099,10 +1091,6 @@ criteria = "safe-to-deploy"
 version = "0.9.0"
 criteria = "safe-to-deploy"
 
-[[exemptions.olpc-cjson]]
-version = "0.1.4"
-criteria = "safe-to-deploy"
-
 [[exemptions.once_cell]]
 version = "1.21.4"
 criteria = "safe-to-deploy"
@@ -1116,10 +1104,6 @@ version = "0.58.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.opendal-http-transport-reqwest]]
-version = "0.58.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.opendal-service-fs]]
 version = "0.58.2"
 criteria = "safe-to-deploy"
 
@@ -1165,10 +1149,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.parley]]
 version = "0.6.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.pathdiff]]
-version = "0.2.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.pdf-writer]]
@@ -1357,10 +1337,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.reqsign-core]]
 version = "3.3.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.reqsign-file-read-tokio]]
-version = "3.0.6"
 criteria = "safe-to-deploy"
 
 [[exemptions.resvg]]
@@ -1596,10 +1572,6 @@ version = "0.9.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.sqlx-core]]
-version = "0.9.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.sqlx-macros]]
 version = "0.9.0"
 criteria = "safe-to-deploy"
 

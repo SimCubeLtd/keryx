@@ -1,7 +1,47 @@
 
 # cargo-vet audits file
 
-[audits]
+[[audits.atoi]]
+who = "Claude (AI assistant), reviewing for SimCube Ltd"
+criteria = "safe-to-deploy"
+version = "2.0.0"
+notes = "Read in full (687 lines, about half documentation). Generic ASCII integer parsing over num-traits. No unsafe, no I/O, no build script. The unchecked variants can overflow on long input, as documented; the checked variants switch to checked arithmetic past the safe digit count."
+
+[[audits.docker_credential]]
+who = "Claude (AI assistant), reviewing for SimCube Ltd"
+criteria = "safe-to-deploy"
+version = "1.4.0"
+notes = "Read in full (648 lines). No unsafe, no network, no build script. Reads the Docker config from DOCKER_CONFIG or HOME/.docker, and the podman auth file. Spawns docker-credential-<name>, where the name comes from the user's own Docker config, the same trust model as the docker CLI; the server address goes to the helper on stdin, never on the command line. Its HelperFailure error carries the helper's stdout and stderr, so callers should not print it; Keryx discards the error and falls back to anonymous."
+
+[[audits.olpc-cjson]]
+who = "Claude (AI assistant), reviewing for SimCube Ltd"
+criteria = "safe-to-deploy"
+version = "0.1.4"
+notes = "Read in full (520 lines with tests). A serde_json Formatter that buffers object members in a BTreeMap to sort keys, NFC-normalises strings and rejects floats. No unsafe, no I/O beyond the writer it is handed, no build script. The src/main.rs is a separate bin target (stdin to stdout) that a library dependency does not build. oci-client uses it to canonicalise manifests before hashing."
+
+[[audits.opendal-service-fs]]
+who = "Claude (AI assistant), reviewing for SimCube Ltd"
+criteria = "safe-to-deploy"
+version = "0.58.2"
+notes = "Read core, writer, lister, reader and deleter in full and the filesystem-touching parts of backend (1391 lines total). With atomic_write_dir set, a write goes to a create_new temp file, is flushed and sync_all'd, then renamed over the target. Delete of a missing path succeeds. confined_join rejects '..' components; it would not stop an absolute key by itself, but opendal-core normalises paths before they reach the service and Keryx only builds keys from internal ids. Two 'unsafe impl Sync': FsWriter's fields are all Sync already, so it is redundant; FsLister<P> is declared Sync for any P, which is broader than necessary but sound here because the field is private and only reached through &mut self, and it is only instantiated with tokio::fs::ReadDir. Reads and writes user xattrs on Unix through the xattr crate. No network, no process spawning, no build script."
+
+[[audits.pathdiff]]
+who = "Claude (AI assistant), reviewing for SimCube Ltd"
+criteria = "safe-to-deploy"
+version = "0.2.3"
+notes = "Read in full (252 lines with tests). Pure path component arithmetic. No unsafe, no I/O, no build script. The optional camino feature is not enabled in this build."
+
+[[audits.reqsign-file-read-tokio]]
+who = "Claude (AI assistant), reviewing for SimCube Ltd"
+criteria = "safe-to-deploy"
+version = "3.0.6"
+notes = "Read in full (91 lines). One impl of reqsign's FileRead that calls tokio::fs::read on the path it is given, and an unsupported stub on wasm. No unsafe, no network, no build script."
+
+[[audits.sqlx-macros]]
+who = "Claude (AI assistant), reviewing for SimCube Ltd"
+criteria = "safe-to-deploy"
+version = "0.9.0"
+notes = "Read in full (101 lines). A proc-macro shim: every macro parses its input with syn and delegates to sqlx-macros-core, which this audit does not cover. No unsafe and no build script in this crate. Keryx enables none of sqlx's macro features itself; SeaORM pulls the crate in."
 
 [[trusted.aho-corasick]]
 criteria = "safe-to-deploy"
