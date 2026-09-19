@@ -14,7 +14,7 @@ use keryx_client::{read_auth, save_credentials, Api, CliAuth, DraftMapping};
 use keryx_core::types::{Availability, AvailabilityUpdate, DraftSummary};
 use keryx_db::DraftStore;
 use keryx_policy::validate_html;
-use keryx_server::{S3Args, StorageKind};
+use keryx_server::{DatabaseArgs, S3Args, StorageKind};
 use keryx_store::{BlobBackend, BlobRef, MigrateOptions};
 
 #[derive(Args, Debug)]
@@ -563,9 +563,8 @@ pub enum StorageCommand {
 
 #[derive(Args, Debug)]
 pub struct StorageLocationArgs {
-    /// SQLite database path (default: ~/.keryx/keryx.db)
-    #[arg(long, env = "KERYX_DB")]
-    pub db: Option<PathBuf>,
+    #[command(flatten)]
+    pub database: DatabaseArgs,
     /// Data directory holding the disk blob store (default: ~/.keryx)
     #[arg(long, env = "KERYX_DATA_DIR")]
     pub data_dir: Option<PathBuf>,
@@ -610,14 +609,13 @@ impl StorageLocationArgs {
     /// Read through DraftStore rather than opening SQLite directly, so these
     /// commands work on whatever database the server uses.
     async fn blob_records(&self) -> Result<Vec<keryx_db::BlobRecord>> {
-        let db_path = self
-            .db
-            .clone()
-            .unwrap_or_else(keryx_server::default_db_path);
-        if !db_path.exists() {
-            bail!("no database at {}", db_path.display());
+        let config = self.database.config();
+        if let keryx_db::DatabaseConfig::Sqlite { path, .. } = &config {
+            if !path.exists() {
+                bail!("no database at {}", path.display());
+            }
         }
-        let (store, _) = keryx_db::SeaOrmStore::open_sqlite(&db_path, true).await?;
+        let (store, _) = keryx_db::SeaOrmStore::open(&config).await?;
         store.blob_records().await
     }
 

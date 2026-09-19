@@ -78,7 +78,16 @@ impl std::fmt::Display for Adoption {
 /// `backup` takes a consistent snapshot before the first write to a legacy
 /// database; it is on by default at the call site.
 pub async fn open_sqlite(path: &Path, backup: bool) -> Result<(DatabaseConnection, Adoption)> {
-    let db = connect_sqlite(path).await?;
+    open_sqlite_pooled(path, backup, None).await
+}
+
+/// [`open_sqlite`] with an explicit pool size.
+pub async fn open_sqlite_pooled(
+    path: &Path,
+    backup: bool,
+    pool_size: Option<u32>,
+) -> Result<(DatabaseConnection, Adoption)> {
+    let db = connect_sqlite(path, pool_size).await?;
     let backup_target = backup.then(|| backup_path(path));
     let adoption = adopt(&db, backup_target.as_deref()).await?;
     Ok((db, adoption))
@@ -241,4 +250,19 @@ async fn query_i64<C: ConnectionTrait>(db: &C, sql: &str) -> Result<i64> {
         .await?
         .with_context(|| format!("{sql} returned no row"))?;
     Ok(row.try_get_by_index::<i64>(0)?)
+}
+
+/// Migrate a Postgres database. There is no legacy to adopt: Postgres
+/// databases have only ever been created by the migrator.
+pub async fn migrate_postgres(db: &DatabaseConnection) -> Result<Adoption> {
+    let pending = Migrator::get_pending_migrations(db).await?.len();
+    let total = Migrator::migrations().len();
+    Migrator::up(db, None)
+        .await
+        .context("running database migrations")?;
+    Ok(if pending == total {
+        Adoption::Fresh
+    } else {
+        Adoption::Managed
+    })
 }

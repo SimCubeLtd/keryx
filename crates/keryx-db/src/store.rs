@@ -132,28 +132,104 @@ pub trait DraftStore: Send + Sync {
     async fn next_wake_at(&self, now: &str) -> Result<Option<String>>;
 }
 
+/// Which database to open. SQLite at a path is the default; a Postgres URL
+/// is the opt-in that lets Keryx run with no persistent volume.
+#[derive(Debug, Clone)]
+pub enum DatabaseConfig {
+    Sqlite {
+        path: std::path::PathBuf,
+        /// Snapshot a legacy database before adopting it.
+        backup: bool,
+        pool_size: Option<u32>,
+    },
+    Postgres {
+        /// `postgres://...`, with TLS set through `sslmode` and `sslrootcert`.
+        url: String,
+        pool_size: Option<u32>,
+    },
+}
+
+impl DatabaseConfig {
+    /// Where this is, safe to print: never the credentials in a URL.
+    pub fn describe(&self) -> String {
+        match self {
+            DatabaseConfig::Sqlite { path, .. } => path.display().to_string(),
+            DatabaseConfig::Postgres { url, .. } => crate::connect::redact_url(url),
+        }
+    }
+}
+
 pub struct SeaOrmStore {
     db: DatabaseConnection,
 }
 
 impl SeaOrmStore {
-    /// Open the SQLite database at `path`, creating it or adopting a legacy
-    /// one in place. `backup` snapshots a legacy database before its first
-    /// write.
-    pub async fn open_sqlite(path: &Path, backup: bool) -> Result<(Self, Adoption)> {
-        let (db, adoption) = adopt::open_sqlite(path, backup).await?;
-        Ok((Self { db }, adoption))
+    /// Open the database `config` names, migrating it first. On SQLite that
+    /// includes adopting a legacy database in place.
+    pub async fn open(config: &DatabaseConfig) -> Result<(Self, Adoption)> {
+        match config {
+            DatabaseConfig::Sqlite {
+                path,
+                backup,
+                pool_size,
+            } => {
+                let (db, adoption) = adopt::open_sqlite_pooled(path, *backup, *pool_size).await?;
+                Ok((Self { db }, adoption))
+            }
+            DatabaseConfig::Postgres { url, pool_size } => {
+                let db = crate::connect::connect_postgres(url, *pool_size, None).await?;
+                let adoption = adopt::migrate_postgres(&db).await?;
+                Ok((Self { db }, adoption))
+            }
+        }
     }
 
-    /// A private in-memory store, for tests.
+    /// Open the SQLite database at `path` with the default pool. `backup`
+    /// snapshots a legacy database before its first write.
+    pub async fn open_sqlite(path: &Path, backup: bool) -> Result<(Self, Adoption)> {
+        Self::open(&DatabaseConfig::Sqlite {
+            path: path.to_path_buf(),
+            backup,
+            pool_size: None,
+        })
+        .await
+    }
+
+    /// A private, empty store for one test. In-memory SQLite by default. With
+    /// `KERYX_TEST_DATABASE_URL` set to a Postgres URL, a fresh schema in that
+    /// database instead, so the same suite runs against both backends.
     #[cfg(any(test, feature = "test-support"))]
-    pub async fn open_memory() -> Self {
-        let db = crate::connect::connect_sqlite_memory()
+    pub async fn open_test() -> Self {
+        use crate::connect::{connect_postgres, connect_sqlite_memory};
+        let Some(url) = std::env::var("KERYX_TEST_DATABASE_URL")
+            .ok()
+            .filter(|url| !url.is_empty())
+        else {
+            let db = connect_sqlite_memory()
+                .await
+                .expect("opening in-memory SQLite");
+            adopt::adopt(&db, None)
+                .await
+                .expect("migrating in-memory SQLite");
+            return Self { db };
+        };
+
+        let schema = format!("keryx_test_{}", new_internal_id().to_lowercase());
+        let admin = connect_postgres(&url, Some(1), None)
             .await
-            .expect("opening in-memory SQLite");
-        adopt::adopt(&db, None)
+            .expect("connecting to the test Postgres");
+        admin
+            .execute_unprepared(&format!("CREATE SCHEMA \"{schema}\""))
             .await
-            .expect("migrating in-memory SQLite");
+            .expect("creating a test schema");
+        admin.close().await.expect("closing the admin connection");
+
+        let db = connect_postgres(&url, None, Some(&schema))
+            .await
+            .expect("connecting to the test schema");
+        adopt::migrate_postgres(&db)
+            .await
+            .expect("migrating the test schema");
         Self { db }
     }
 
@@ -413,10 +489,8 @@ impl DraftStore for SeaOrmStore {
             None
         } else {
             let live = draft::Entity::find_by_id(draft_id.clone())
-                .filter(draft::Column::DeletedAt.is_null())
-                .one(&tx)
-                .await?;
-            match live {
+                .filter(draft::Column::DeletedAt.is_null());
+            match live.one(&tx).await? {
                 Some(draft) => Some(draft),
                 None => return Err(UploadError::DraftNotFound),
             }

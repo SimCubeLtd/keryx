@@ -29,7 +29,9 @@ use keryx_core::types::{
     Availability, AvailabilityUpdate, DraftDetail, DraftSummary, PushSubscriptionInput,
     UploadMetadata, UploadResponse,
 };
-use keryx_db::{AvailabilityError, DraftStore, NewUpload, SeaOrmStore, UploadError};
+use keryx_db::{
+    AvailabilityError, DatabaseConfig, DraftStore, NewUpload, SeaOrmStore, UploadError,
+};
 use keryx_policy::{validate_html, PolicyOptions, DEFAULT_MAX_HTML_BYTES};
 use keryx_render::pdf::{render_version_pdf, PdfIdentity};
 use keryx_render::{
@@ -41,6 +43,51 @@ use keryx_store::{create_backend, object_key, BackendConfig, BlobBackend, DiskCo
 pub enum StorageKind {
     Disk,
     S3,
+}
+
+/// The database flags, shared by `serve` and the offline `storage` commands.
+#[derive(clap::Args, Debug, Clone)]
+pub struct DatabaseArgs {
+    /// SQLite database path (default: ~/.keryx/keryx.db). Ignored when
+    /// --database-url is set
+    #[arg(long, env = "KERYX_DB")]
+    pub db: Option<PathBuf>,
+
+    /// A postgres:// URL selects Postgres instead of SQLite. TLS is set in
+    /// the URL with sslmode and sslrootcert
+    #[arg(long, env = "KERYX_DATABASE_URL", hide_env_values = true)]
+    pub database_url: Option<String>,
+
+    /// Database connections in the pool (default: 1 on SQLite, 4 on Postgres)
+    #[arg(long, env = "KERYX_DB_POOL_SIZE")]
+    pub db_pool_size: Option<u32>,
+
+    /// Skip the snapshot Keryx takes before it first adopts a SQLite database
+    /// written by an older version
+    #[arg(long, env = "KERYX_NO_BACKUP")]
+    pub no_backup: bool,
+}
+
+impl DatabaseArgs {
+    /// Postgres when a URL is given; otherwise SQLite at --db, which keeps
+    /// every existing deployment on its current path with no new flags.
+    pub fn config(&self) -> DatabaseConfig {
+        match self
+            .database_url
+            .as_deref()
+            .filter(|url| !url.trim().is_empty())
+        {
+            Some(url) => DatabaseConfig::Postgres {
+                url: url.trim().to_string(),
+                pool_size: self.db_pool_size,
+            },
+            None => DatabaseConfig::Sqlite {
+                path: self.db.clone().unwrap_or_else(default_db_path),
+                backup: !self.no_backup,
+                pool_size: self.db_pool_size,
+            },
+        }
+    }
 }
 
 /// The S3 flags, shared by `serve` and the offline `storage` commands so one
@@ -107,14 +154,8 @@ pub struct ServeArgs {
     #[arg(long, env = "KERYX_HOST", default_value = "127.0.0.1")]
     pub host: String,
 
-    /// SQLite database path (default: ~/.keryx/keryx.db)
-    #[arg(long, env = "KERYX_DB")]
-    pub db: Option<PathBuf>,
-
-    /// Skip the snapshot Keryx takes before it first adopts a database
-    /// written by an older version
-    #[arg(long, env = "KERYX_NO_BACKUP")]
-    pub no_backup: bool,
+    #[command(flatten)]
+    pub database: DatabaseArgs,
 
     /// Directory for local state: the push identity, the blob staging area,
     /// and the stored HTML files when --storage is disk (default: ~/.keryx)
@@ -200,7 +241,7 @@ pub fn default_db_path() -> PathBuf {
 }
 
 pub fn run(args: ServeArgs) -> Result<()> {
-    let db_path = args.db.clone().unwrap_or_else(default_db_path);
+    let database = args.database.config();
     let data_dir = args.data_dir.clone().unwrap_or_else(default_state_dir);
     let public_base_url = args
         .public_base_url
@@ -231,7 +272,7 @@ pub fn run(args: ServeArgs) -> Result<()> {
         let blob_description = store.describe().to_string();
 
         // Opening adopts a legacy database in place, after a backup.
-        let (store_db, adoption) = SeaOrmStore::open_sqlite(&db_path, !args.no_backup).await?;
+        let (store_db, adoption) = SeaOrmStore::open(&database).await?;
         let db_status = adoption.to_string();
 
         let state: SharedState = Arc::new(AppState {
@@ -253,7 +294,7 @@ pub fn run(args: ServeArgs) -> Result<()> {
             .await
             .with_context(|| format!("binding {addr}"))?;
         println!("keryx serving on http://{addr}");
-        println!("database: {} ({db_status})", db_path.display());
+        println!("database: {} ({db_status})", database.describe());
         println!("blobs: {blob_description} (probe ok, {probe_ms} ms)");
         println!(
             "policy: max {} bytes{}{}",
@@ -1162,7 +1203,7 @@ mod tests {
     /// The state plus the concrete store behind it, for tests that look at
     /// rows no store method exposes.
     async fn test_state_and_db(store: Arc<dyn BlobBackend>) -> (SharedState, Arc<SeaOrmStore>) {
-        let db = Arc::new(SeaOrmStore::open_memory().await);
+        let db = Arc::new(SeaOrmStore::open_test().await);
         let state = Arc::new(AppState {
             db: db.clone(),
             store,

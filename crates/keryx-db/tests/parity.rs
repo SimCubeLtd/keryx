@@ -114,7 +114,7 @@ async fn all_rows(db: &DatabaseConnection) -> BTreeMap<String, Vec<String>> {
 async fn store_answers(path: &Path) -> serde_json::Value {
     use keryx_db::DraftStore;
     let ids = {
-        let db = keryx_db::connect::connect_sqlite(path).await.unwrap();
+        let db = keryx_db::connect::connect_sqlite(path, None).await.unwrap();
         let ids = common::strings(&db, "SELECT id FROM drafts ORDER BY id").await;
         db.close().await.unwrap();
         ids

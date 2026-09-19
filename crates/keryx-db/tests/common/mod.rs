@@ -23,7 +23,7 @@ pub const RELEASED_0_5_1_DB: &str =
 /// Levels 1 and 2 carry ALTER-appended columns, as an upgraded database does.
 pub async fn build_legacy(dir: &Path, user_version: u8) -> PathBuf {
     let path = dir.join(format!("legacy-v{user_version}.db"));
-    let db = connect_sqlite(&path).await.unwrap();
+    let db = connect_sqlite(&path, None).await.unwrap();
     db.execute_unprepared(V0_SCHEMA).await.unwrap();
     db.execute_unprepared(SEED).await.unwrap();
     if user_version >= 1 {

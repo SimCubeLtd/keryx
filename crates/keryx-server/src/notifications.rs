@@ -556,7 +556,7 @@ mod tests {
     #[tokio::test]
     async fn push_requests_are_encrypted_and_signed_with_a_same_origin_target() {
         let hub = PushHub::new(VapidIdentity::generate(), default_contact(None));
-        let store = keryx_db::SeaOrmStore::open_memory().await;
+        let store = keryx_db::SeaOrmStore::open_test().await;
         store
             .upsert_push_subscription(&fake_subscription())
             .await
@@ -593,7 +593,7 @@ mod tests {
 
     #[tokio::test]
     async fn outcomes_retry_with_backoff_give_up_and_drop_expired_subscriptions() {
-        let store = keryx_db::SeaOrmStore::open_memory().await;
+        let store = keryx_db::SeaOrmStore::open_test().await;
         let subscription = store
             .upsert_push_subscription(&fake_subscription())
             .await

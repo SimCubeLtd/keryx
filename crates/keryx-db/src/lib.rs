@@ -13,7 +13,7 @@ pub mod migration;
 mod store;
 mod types;
 
-pub use store::{DraftStore, SeaOrmStore};
+pub use store::{DatabaseConfig, DraftStore, SeaOrmStore};
 pub use types::{
     normalize_wake_time, AvailabilityError, BlobRecord, NewUpload, PendingDelivery, ServedVersion,
     UploadError, UploadOutcome, DEFAULT_DISABLE_REASON,

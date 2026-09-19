@@ -124,7 +124,9 @@ async fn a_legacy_database_is_backed_up_before_its_first_write() {
 
     // The snapshot is the database as it was: legacy shape, all rows, untracked.
     let (snapshot, _) = (
-        keryx_db::connect::connect_sqlite(&backup).await.unwrap(),
+        keryx_db::connect::connect_sqlite(&backup, None)
+            .await
+            .unwrap(),
         (),
     );
     assert_eq!(

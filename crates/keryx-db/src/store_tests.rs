@@ -62,7 +62,7 @@ fn new_upload<'a>(
 
 #[tokio::test]
 async fn upload_versioning_and_delete_flow() {
-    let store = SeaOrmStore::open_memory().await;
+    let store = SeaOrmStore::open_test().await;
     let meta = UploadMetadata::default();
 
     let first = record(&store, "<title>Test</title>v1", None, &meta)
@@ -116,7 +116,7 @@ async fn upload_versioning_and_delete_flow() {
 
 #[tokio::test]
 async fn purge_removes_rows_and_reports_blob_keys() {
-    let store = SeaOrmStore::open_memory().await;
+    let store = SeaOrmStore::open_test().await;
     let meta = UploadMetadata::default();
 
     let first = record(&store, "<title>Test</title>v1", None, &meta)
@@ -156,7 +156,7 @@ async fn purge_removes_rows_and_reports_blob_keys() {
 
 #[tokio::test]
 async fn repository_and_branch_provenance_are_versioned() {
-    let store = SeaOrmStore::open_memory().await;
+    let store = SeaOrmStore::open_test().await;
     let first_meta = UploadMetadata {
         repo_org: Some("acme".into()),
         repo_name: Some("widgets".into()),
@@ -208,7 +208,7 @@ async fn repository_and_branch_provenance_are_versioned() {
 
 #[tokio::test]
 async fn latest_summary_does_not_inherit_repository_from_an_older_version() {
-    let store = SeaOrmStore::open_memory().await;
+    let store = SeaOrmStore::open_test().await;
     let recorded = UploadMetadata {
         repo_org: Some("acme".into()),
         repo_name: Some("widgets".into()),
@@ -242,7 +242,7 @@ async fn latest_summary_does_not_inherit_repository_from_an_older_version() {
 
 #[tokio::test]
 async fn availability_transitions_are_exclusive_and_validated() {
-    let store = SeaOrmStore::open_memory().await;
+    let store = SeaOrmStore::open_test().await;
     let meta = UploadMetadata::default();
     let draft_id = record(&store, "<title>Test</title>v1", None, &meta)
         .await
@@ -355,7 +355,7 @@ fn subscription(endpoint: &str, events: Option<Vec<NotificationKind>>) -> PushSu
 
 #[tokio::test]
 async fn uploads_and_serving_changes_record_events_for_opted_in_subscriptions() {
-    let store = SeaOrmStore::open_memory().await;
+    let store = SeaOrmStore::open_test().await;
     let meta = UploadMetadata::default();
     let everything = store
         .upsert_push_subscription(&subscription("https://push.test/a", None))
@@ -482,7 +482,7 @@ async fn uploads_and_serving_changes_record_events_for_opted_in_subscriptions() 
 
 #[tokio::test]
 async fn a_due_snooze_wakes_exactly_once_without_touching_the_draft() {
-    let store = SeaOrmStore::open_memory().await;
+    let store = SeaOrmStore::open_test().await;
     let draft_id = record(
         &store,
         "<title>Test</title>v1",
@@ -561,7 +561,7 @@ async fn a_due_snooze_wakes_exactly_once_without_touching_the_draft() {
 
 #[tokio::test]
 async fn a_draft_purged_between_resolve_and_record_is_not_found() {
-    let store = SeaOrmStore::open_memory().await;
+    let store = SeaOrmStore::open_test().await;
     let meta = UploadMetadata::default();
     let first = record(&store, "<p>v1</p>", None, &meta).await.unwrap();
 
@@ -602,7 +602,7 @@ async fn a_draft_purged_between_resolve_and_record_is_not_found() {
 
 #[tokio::test]
 async fn unknown_target_draft_is_not_found() {
-    let store = SeaOrmStore::open_memory().await;
+    let store = SeaOrmStore::open_test().await;
     let result = record(
         &store,
         "<p>x</p>",
@@ -615,7 +615,7 @@ async fn unknown_target_draft_is_not_found() {
 
 #[tokio::test]
 async fn ping_answers_and_blob_records_cover_every_version() {
-    let store = SeaOrmStore::open_memory().await;
+    let store = SeaOrmStore::open_test().await;
     store.ping().await.unwrap();
     let meta = UploadMetadata::default();
     let first = record(&store, "<p>v1</p>", None, &meta).await.unwrap();
