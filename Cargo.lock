@@ -2546,6 +2546,9 @@ dependencies = [
  "futures-util",
  "hex",
  "keryx-core",
+ "keryx-db",
+ "keryx-policy",
+ "keryx-store",
  "open",
  "rand 0.9.5",
  "ratatui",
@@ -2573,6 +2576,35 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+]
+
+[[package]]
+name = "keryx-db"
+version = "0.5.1"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "keryx-core",
+ "keryx-store",
+ "rusqlite",
+ "serde_json",
+]
+
+[[package]]
+name = "keryx-policy"
+version = "0.5.1"
+dependencies = [
+ "scraper",
+ "serde",
+ "url",
+]
+
+[[package]]
+name = "keryx-store"
+version = "0.5.1"
+dependencies = [
+ "anyhow",
+ "keryx-core",
 ]
 
 [[package]]

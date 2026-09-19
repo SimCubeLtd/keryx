@@ -1,18 +1,18 @@
 mod cli;
 mod client;
-mod db;
 mod gitmeta;
 mod notifications;
 mod pdf;
-mod policy;
 mod realtime;
 mod render;
 mod server;
-mod storage;
 mod tui;
 
 use clap::{Parser, Subcommand};
-use keryx_core::{ids, types};
+use keryx_core::types;
+use keryx_db as db;
+use keryx_policy as policy;
+use keryx_store as storage;
 
 #[derive(Parser)]
 #[command(

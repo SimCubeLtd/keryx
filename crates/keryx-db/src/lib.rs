@@ -9,12 +9,12 @@ use chrono::{DateTime, Utc};
 use keryx_core::{format_timestamp, now};
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::ids::{new_draft_id, new_internal_id};
-use crate::storage::BlobStore;
-use crate::types::{
+use keryx_core::ids::{new_draft_id, new_internal_id};
+use keryx_core::types::{
     AvailabilityUpdate, DraftSummary, NotificationEvent, NotificationKind, PushSubscriptionInput,
     PushSubscriptionSummary, UploadMetadata, VersionInfo,
 };
+use keryx_store::BlobStore;
 
 pub fn open(path: &Path) -> Result<Connection> {
     if let Some(parent) = path.parent() {
@@ -983,7 +983,7 @@ pub fn next_wake_at(conn: &Connection, now: &str) -> Result<Option<String>> {
     )?)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn test_connection() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
     init(&conn).unwrap();
@@ -1031,7 +1031,7 @@ mod tests {
     #[test]
     fn upload_versioning_and_delete_flow() {
         let mut conn = test_conn();
-        let store = crate::storage::test_store();
+        let store = keryx_store::test_store();
         let meta = UploadMetadata::default();
 
         let first = record_upload(
@@ -1079,7 +1079,7 @@ mod tests {
     #[test]
     fn purge_removes_rows_and_reports_blob_keys() {
         let mut conn = test_conn();
-        let store = crate::storage::test_store();
+        let store = keryx_store::test_store();
         let meta = UploadMetadata::default();
 
         let first = record_upload(
@@ -1128,7 +1128,7 @@ mod tests {
     #[test]
     fn repository_and_branch_provenance_are_versioned() {
         let mut conn = test_conn();
-        let store = crate::storage::test_store();
+        let store = keryx_store::test_store();
         let first_meta = UploadMetadata {
             repo_org: Some("acme".into()),
             repo_name: Some("widgets".into()),
@@ -1184,7 +1184,7 @@ mod tests {
     #[test]
     fn latest_summary_does_not_inherit_repository_from_an_older_version() {
         let mut conn = test_conn();
-        let store = crate::storage::test_store();
+        let store = keryx_store::test_store();
         let recorded = UploadMetadata {
             repo_org: Some("acme".into()),
             repo_name: Some("widgets".into()),
@@ -1307,7 +1307,7 @@ mod tests {
     #[test]
     fn availability_transitions_are_exclusive_and_validated() {
         let mut conn = test_conn();
-        let store = crate::storage::test_store();
+        let store = keryx_store::test_store();
         let meta = UploadMetadata::default();
         let draft_id = record_upload(
             &mut conn,
@@ -1404,7 +1404,7 @@ mod tests {
     ) -> PushSubscriptionInput {
         PushSubscriptionInput {
             endpoint: endpoint.into(),
-            keys: crate::types::PushKeys {
+            keys: keryx_core::types::PushKeys {
                 p256dh: "BPUBLIC".into(),
                 auth: "AUTH".into(),
             },
@@ -1415,7 +1415,7 @@ mod tests {
     #[test]
     fn uploads_and_serving_changes_record_events_for_opted_in_subscriptions() {
         let mut conn = test_conn();
-        let store = crate::storage::test_store();
+        let store = keryx_store::test_store();
         let meta = UploadMetadata::default();
         let everything =
             upsert_push_subscription(&conn, &subscription("https://push.test/a", None)).unwrap();
@@ -1523,7 +1523,7 @@ mod tests {
     #[test]
     fn a_due_snooze_wakes_exactly_once_without_touching_the_draft() {
         let mut conn = test_conn();
-        let store = crate::storage::test_store();
+        let store = keryx_store::test_store();
         let draft_id = record_upload(
             &mut conn,
             &store,
@@ -1566,7 +1566,7 @@ mod tests {
             row.snoozed_until.as_deref(),
             Some("2026-01-01T09:00:00.000Z")
         );
-        assert_eq!(row.availability(), crate::types::Availability::Active);
+        assert_eq!(row.availability(), keryx_core::types::Availability::Active);
         assert_eq!(
             due_deliveries(&conn, "2099-01-01T00:00:00.000Z", 50)
                 .unwrap()
@@ -1582,7 +1582,7 @@ mod tests {
     #[test]
     fn unknown_target_draft_is_not_found() {
         let mut conn = test_conn();
-        let store = crate::storage::test_store();
+        let store = keryx_store::test_store();
         let result = record_upload(
             &mut conn,
             &store,

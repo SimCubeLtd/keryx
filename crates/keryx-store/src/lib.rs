@@ -65,11 +65,11 @@ impl BlobStore {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn test_store() -> BlobStore {
     let root = std::env::temp_dir()
         .join("keryx-tests")
-        .join(crate::ids::new_internal_id());
+        .join(keryx_core::ids::new_internal_id());
     BlobStore::new(root)
 }
 

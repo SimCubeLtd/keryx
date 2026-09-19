@@ -1,0 +1,23 @@
+[package]
+name = "keryx-db"
+description = "Keryx metadata store: schema, upgrades and every query."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[features]
+# Exposes test_connection() to the test suites of dependent crates.
+test-support = []
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+keryx-core.workspace = true
+keryx-store.workspace = true
+rusqlite.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+keryx-store = { workspace = true, features = ["test-support"] }

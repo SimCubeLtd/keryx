@@ -15,6 +15,9 @@ repository = "https://github.com/SimCubeLtd/keryx"
 # version or feature set by accident. Crates opt in with `workspace = true`.
 [workspace.dependencies]
 keryx-core = { path = "crates/keryx-core" }
+keryx-db = { path = "crates/keryx-db" }
+keryx-policy = { path = "crates/keryx-policy" }
+keryx-store = { path = "crates/keryx-store" }
 
 anyhow = "1"
 axum = "0.8"
@@ -52,6 +55,9 @@ repository.workspace = true
 
 [dependencies]
 keryx-core.workspace = true
+keryx-db.workspace = true
+keryx-policy.workspace = true
+keryx-store.workspace = true
 
 anyhow.workspace = true
 axum.workspace = true
@@ -78,6 +84,10 @@ url.workspace = true
 usvg.workspace = true
 web-push-native.workspace = true
 woff2-patched.workspace = true
+
+[dev-dependencies]
+keryx-db = { workspace = true, features = ["test-support"] }
+keryx-store = { workspace = true, features = ["test-support"] }
 
 [profile.release]
 lto = true

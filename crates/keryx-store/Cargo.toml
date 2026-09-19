@@ -1,0 +1,16 @@
+[package]
+name = "keryx-store"
+description = "Keryx blob storage: draft HTML bytes addressed by opaque object keys."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[features]
+# Exposes test_store() to the test suites of dependent crates.
+test-support = []
+
+[dependencies]
+anyhow.workspace = true
+keryx-core.workspace = true
