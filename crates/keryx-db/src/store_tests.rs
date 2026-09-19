@@ -6,7 +6,7 @@ use crate::entity::{draft, draft_version, notification_event};
 use keryx_core::types::UploadMetadata;
 use sea_orm::sea_query::Expr;
 use sea_orm::PaginatorTrait;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder};
 
 async fn event_kinds(store: &SeaOrmStore, draft_id: &str) -> Vec<(String, String)> {
     notification_event::Entity::find()
@@ -682,4 +682,72 @@ async fn concurrent_uploads_surface_no_sqlite_busy() {
         (2..=25).collect::<Vec<i64>>(),
         "version numbers are gapless and unique"
     );
+}
+
+/// On Postgres MAX + 1 can collide between concurrent uploads; the draft row
+/// lock means no caller ever sees it. On SQLite the immediate transaction
+/// serialises them. Either way: no failures, no gaps, no duplicates.
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_uploads_to_one_draft_number_their_versions_without_gaps() {
+    let store = std::sync::Arc::new(SeaOrmStore::open_test().await);
+    let meta = UploadMetadata::default();
+    let draft_id = record(&store, "<p>v1</p>", None, &meta)
+        .await
+        .unwrap()
+        .draft_id;
+
+    let mut uploads = Vec::new();
+    for _ in 0..16 {
+        let (store, draft_id) = (store.clone(), draft_id.clone());
+        uploads.push(tokio::spawn(async move {
+            let meta = UploadMetadata::default();
+            record(&store, "<p>again</p>", Some(draft_id), &meta)
+                .await
+                .map(|outcome| outcome.version_number)
+        }));
+    }
+    let mut numbers = Vec::new();
+    for upload in uploads {
+        numbers.push(upload.await.unwrap().expect("no upload may fail"));
+    }
+    numbers.sort_unstable();
+    assert_eq!(numbers, (2..=17).collect::<Vec<i64>>());
+}
+
+/// A rolling update starts a new pod while the old one runs. Both migrate;
+/// the advisory lock makes the second wait and then find nothing pending.
+#[tokio::test(flavor = "multi_thread")]
+async fn two_migrators_started_together_against_postgres_both_succeed() {
+    let Some(url) = std::env::var("KERYX_TEST_DATABASE_URL")
+        .ok()
+        .filter(|url| !url.is_empty())
+    else {
+        return; // Postgres only; SQLite has one process per file.
+    };
+    let schema = format!("keryx_test_{}", new_internal_id().to_lowercase());
+    let admin = crate::connect::connect_postgres(&url, Some(1), None)
+        .await
+        .unwrap();
+    admin
+        .execute_unprepared(&format!("CREATE SCHEMA \"{schema}\""))
+        .await
+        .unwrap();
+
+    let mut pods = Vec::new();
+    for _ in 0..4 {
+        let (url, schema) = (url.clone(), schema.clone());
+        pods.push(tokio::spawn(async move {
+            let db = crate::connect::connect_postgres(&url, Some(2), Some(&schema))
+                .await
+                .unwrap();
+            crate::adopt::migrate_postgres(&db).await
+        }));
+    }
+    let mut created = 0;
+    for pod in pods {
+        if pod.await.unwrap().expect("every migrator must succeed") == Adoption::Fresh {
+            created += 1;
+        }
+    }
+    assert_eq!(created, 1, "exactly one pod creates the schema");
 }

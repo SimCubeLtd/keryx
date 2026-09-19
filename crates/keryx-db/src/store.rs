@@ -488,8 +488,16 @@ impl DraftStore for SeaOrmStore {
         let existing = if created {
             None
         } else {
-            let live = draft::Entity::find_by_id(draft_id.clone())
+            let mut live = draft::Entity::find_by_id(draft_id.clone())
                 .filter(draft::Column::DeletedAt.is_null());
+            // MAX + 1 can collide between concurrent uploads to one draft.
+            // UNIQUE (draft_id, version_number) makes that an error rather
+            // than corruption; locking the draft row means a user never sees
+            // it. SQLite has no row locks and needs none: the immediate
+            // transaction already serialises writers.
+            if tx.get_database_backend() == DbBackend::Postgres {
+                live = live.lock_exclusive();
+            }
             match live.one(&tx).await? {
                 Some(draft) => Some(draft),
                 None => return Err(UploadError::DraftNotFound),

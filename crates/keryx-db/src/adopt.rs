@@ -252,14 +252,29 @@ async fn query_i64<C: ConnectionTrait>(db: &C, sql: &str) -> Result<i64> {
     Ok(row.try_get_by_index::<i64>(0)?)
 }
 
+/// An arbitrary, fixed key for the migration advisory lock ("KERYX").
+const POSTGRES_MIGRATION_LOCK: i64 = 0x4B_45_52_59_58;
+
 /// Migrate a Postgres database. There is no legacy to adopt: Postgres
 /// databases have only ever been created by the migrator.
+///
+/// SeaORM's migrator takes no lock, and a rolling update starts a new pod
+/// while the old one runs. So the migrator runs inside a transaction that
+/// holds a transaction-scoped advisory lock: a second pod waits here, then
+/// finds nothing pending.
 pub async fn migrate_postgres(db: &DatabaseConnection) -> Result<Adoption> {
-    let pending = Migrator::get_pending_migrations(db).await?.len();
+    let tx = db.begin().await?;
+    tx.execute_unprepared(&format!(
+        "SELECT pg_advisory_xact_lock({POSTGRES_MIGRATION_LOCK})"
+    ))
+    .await
+    .context("taking the migration lock")?;
+    let pending = Migrator::get_pending_migrations(&tx).await?.len();
     let total = Migrator::migrations().len();
-    Migrator::up(db, None)
+    Migrator::up(&tx, None)
         .await
         .context("running database migrations")?;
+    tx.commit().await?;
     Ok(if pending == total {
         Adoption::Fresh
     } else {
