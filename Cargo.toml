@@ -15,6 +15,7 @@ repository = "https://github.com/SimCubeLtd/keryx"
 # version or feature set by accident. Crates opt in with `workspace = true`.
 [workspace.dependencies]
 keryx-client = { path = "crates/keryx-client" }
+keryx-config = { path = "crates/keryx-config" }
 keryx-core = { path = "crates/keryx-core" }
 keryx-db = { path = "crates/keryx-db" }
 keryx-policy = { path = "crates/keryx-policy" }
@@ -29,6 +30,9 @@ axum = "0.8"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
+# File layer only, TOML only: no json/yaml/ini parsers, no async, no env
+# source of its own (clap owns flags and environment variables).
+config = { version = "0.15", default-features = false, features = ["toml"] }
 crossterm = "0.29"
 dirs = "6"
 docker_credential = { version = "1.4", default-features = false }
@@ -66,6 +70,8 @@ serde_json = "1"
 sha2 = "0.10"
 tempfile = "3"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "net", "signal", "sync", "time"] }
+# Rewrites the config file in place without losing the user's comments.
+toml_edit = { version = "0.25", default-features = false, features = ["parse", "display"] }
 url = "2"
 usvg = { version = "0.45", default-features = false, features = ["text"] }
 web-push-native = "0.5"
