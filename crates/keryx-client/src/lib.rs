@@ -11,7 +11,9 @@ use serde_json::Value;
 
 pub mod gitmeta;
 
-use keryx_core::types::{AvailabilityUpdate, DraftDetail, DraftSummary, UploadResponse};
+use keryx_core::types::{
+    AvailabilityUpdate, DraftDetail, DraftSummary, UploadResponse, VersionInfo,
+};
 use keryx_policy::PolicyOptions;
 
 pub const DEFAULT_API_URL: &str = "http://localhost:7812";
@@ -286,6 +288,23 @@ impl Api {
             .unwrap_or(0))
     }
 
+    /// One version's metadata, the companion to [`Api::raw_html`]: the draft
+    /// summary plus the requested version, or the latest when `version` is
+    /// None.
+    pub fn version(
+        &self,
+        draft_id: &str,
+        version: Option<i64>,
+    ) -> Result<(DraftSummary, VersionInfo)> {
+        let detail = self.draft(draft_id)?;
+        let found = select_version(detail.versions, version);
+        match (found, version) {
+            (Some(found), _) => Ok((detail.draft, found)),
+            (None, Some(n)) => bail!("draft {draft_id} has no version {n}"),
+            (None, None) => bail!("draft {draft_id} has no versions"),
+        }
+    }
+
     pub fn raw_html(&self, draft_id: &str, version: Option<i64>) -> Result<String> {
         let path = match version {
             Some(n) => format!("/d/{draft_id}/v/{n}/raw"),
@@ -409,6 +428,14 @@ fn persist_pdf(reader: &mut impl Read, output: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The requested version, or the highest-numbered one.
+fn select_version(versions: Vec<VersionInfo>, version: Option<i64>) -> Option<VersionInfo> {
+    match version {
+        Some(n) => versions.into_iter().find(|v| v.version_number == n),
+        None => versions.into_iter().max_by_key(|v| v.version_number),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -434,5 +461,35 @@ mod tests {
         assert!(persist_pdf(&mut std::io::Cursor::new(b"not-pdf"), &output).is_err());
         assert!(!output.exists());
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn version_selection_defaults_to_the_latest() {
+        let versions = |numbers: &[i64]| -> Vec<VersionInfo> {
+            numbers
+                .iter()
+                .map(|n| {
+                    serde_json::from_value(serde_json::json!({
+                        "id": format!("id{n}"), "versionNumber": n,
+                        "createdAt": "2026-09-01T10:00:00.000Z", "gitBranch": null,
+                        "gitCommitSha": null, "gitCommitSubject": null, "gitDirty": null,
+                        "fileSize": 1, "originalFilename": null,
+                    }))
+                    .unwrap()
+                })
+                .collect()
+        };
+        assert_eq!(
+            select_version(versions(&[1, 3, 2]), None)
+                .unwrap()
+                .version_number,
+            3
+        );
+        assert_eq!(
+            select_version(versions(&[1, 3, 2]), Some(2)).unwrap().id,
+            "id2"
+        );
+        assert!(select_version(versions(&[1]), Some(9)).is_none());
+        assert!(select_version(versions(&[]), None).is_none());
     }
 }
