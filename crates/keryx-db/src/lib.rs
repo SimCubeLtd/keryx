@@ -2,6 +2,7 @@
 //! live on disk (see storage.rs); each version row records the blob's
 //! object key.
 
+pub mod adopt;
 pub mod connect;
 pub mod entity;
 pub mod migration;
