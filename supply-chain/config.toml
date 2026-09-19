@@ -4,6 +4,9 @@
 [cargo-vet]
 version = "0.10"
 
+[policy.stylo]
+audit-as-crates-io = true
+
 [[exemptions.accesskit]]
 version = "0.17.1"
 criteria = "safe-to-deploy"
@@ -2085,7 +2088,7 @@ version = "0.28.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.stylo]]
-version = "0.8.0"
+version = "0.8.0@git:f55507dea5e88ef1baca7219cbc878a1af3aab69"
 criteria = "safe-to-deploy"
 
 [[exemptions.stylo_atoms]]

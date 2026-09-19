@@ -108,3 +108,11 @@ tempfile.workspace = true
 [profile.release]
 lto = true
 strip = true
+
+# stylo 0.8.0 imports every derive_more macro with #[macro_use]. SeaORM enables
+# derive_more's "debug" feature, Cargo unifies it across the build, and every
+# #[derive(Debug)] in stylo then resolves to derive_more's and overflows. The
+# fork is the published 0.8.0 commit plus that one fix, pinned by revision.
+# Drop this once fulgur moves to a stylo release that carries the fix.
+[patch.crates-io]
+stylo = { git = "https://github.com/SimCubeLtd/stylo", rev = "f55507dea5e88ef1baca7219cbc878a1af3aab69" }
