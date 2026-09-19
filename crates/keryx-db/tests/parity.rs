@@ -8,7 +8,8 @@
 //! Level 2, data: adoption leaves every row exactly as the old rusqlite
 //! upgrade path would have, and the old query layer reads the same answers
 //! from both. Those answers are pinned in a golden file, so they outlive the
-//! old code.
+//! old code, and the SeaORM store must give the same answers through
+//! DraftStore.
 //!
 //! Level 3, end to end through the real binary, is tests/legacy_database.rs
 //! in the workspace root.
@@ -136,6 +137,35 @@ fn old_query_layer_answers(path: &Path) -> serde_json::Value {
     })
 }
 
+/// The same questions, asked of the SeaORM store.
+async fn store_answers(path: &Path) -> serde_json::Value {
+    use keryx_db::DraftStore;
+    let ids = {
+        let db = keryx_db::connect::connect_sqlite(path).await.unwrap();
+        let ids = common::strings(&db, "SELECT id FROM drafts ORDER BY id").await;
+        db.close().await.unwrap();
+        ids
+    };
+    let (store, _) = keryx_db::SeaOrmStore::open_sqlite(path, false)
+        .await
+        .unwrap();
+    let mut details = BTreeMap::new();
+    for id in ids {
+        details.insert(
+            id.clone(),
+            serde_json::json!({
+                "summary": store.get_draft_summary(&id).await.unwrap(),
+                "versions": store.list_versions(&id).await.unwrap(),
+            }),
+        );
+    }
+    serde_json::json!({
+        "listing": store.list_drafts().await.unwrap(),
+        "drafts": details,
+        "blobs": store.blob_records().await.unwrap().iter().map(|b| (b.object_key.clone(), b.content_hash.clone(), b.file_size)).collect::<Vec<_>>(),
+    })
+}
+
 fn golden(name: &str, actual: &serde_json::Value) {
     let path = format!(
         "{}/tests/fixtures/golden/{name}.json",
@@ -193,6 +223,13 @@ async fn assert_parity(name: &str, legacy: &Path, dir: &Path) {
         "{name}: answers"
     );
     golden(name, &answers);
+
+    // And the SeaORM store, reading the adopted database, says the same.
+    assert_eq!(
+        store_answers(&new_way).await,
+        answers,
+        "{name}: DraftStore answers"
+    );
 }
 
 #[tokio::test]

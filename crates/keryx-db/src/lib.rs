@@ -6,6 +6,7 @@ pub mod adopt;
 pub mod connect;
 pub mod entity;
 pub mod migration;
+mod store;
 mod types;
 
 use std::path::Path;
@@ -16,6 +17,7 @@ use keryx_core::now;
 use rusqlite::{params, Connection, OptionalExtension};
 
 use keryx_core::ids::{new_draft_id, new_internal_id};
+pub use store::{DraftStore, SeaOrmStore};
 pub use types::{
     normalize_wake_time, AvailabilityError, BlobRecord, NewUpload, PendingDelivery, ServedVersion,
     UploadError, UploadOutcome, DEFAULT_DISABLE_REASON,
