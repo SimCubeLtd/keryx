@@ -101,7 +101,7 @@ pub fn save_credentials(api_key: Option<&str>, api_url_override: Option<&str>) -
         &credentials_path(),
         &Credentials {
             api_key: api_key.map(str::to_string),
-            updated_at: Some(crate::db::now()),
+            updated_at: Some(keryx_core::now()),
         },
     )
 }

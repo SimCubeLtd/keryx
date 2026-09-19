@@ -5,7 +5,8 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
+use keryx_core::{format_timestamp, now};
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::ids::{new_draft_id, new_internal_id};
@@ -14,16 +15,6 @@ use crate::types::{
     AvailabilityUpdate, DraftSummary, NotificationEvent, NotificationKind, PushSubscriptionInput,
     PushSubscriptionSummary, UploadMetadata, VersionInfo,
 };
-
-pub fn now() -> String {
-    format_timestamp(Utc::now())
-}
-
-/// Every stored timestamp uses this one shape, so string comparison in SQL
-/// orders correctly and equal instants compare equal.
-pub fn format_timestamp(value: DateTime<Utc>) -> String {
-    value.to_rfc3339_opts(SecondsFormat::Millis, true)
-}
 
 pub fn open(path: &Path) -> Result<Connection> {
     if let Some(parent) = path.parent() {
@@ -273,7 +264,7 @@ pub fn record_upload(
         .unwrap_or_else(|| "Untitled Draft".to_string());
 
     let version_id = new_internal_id();
-    let content_hash = crate::sha256_hex(upload.html);
+    let content_hash = keryx_core::sha256_hex(upload.html);
     let file_size = upload.html.len() as i64;
     let image_hosts_json = serde_json::to_string(upload.external_image_hosts)
         .map_err(|e| UploadError::Other(e.into()))?;

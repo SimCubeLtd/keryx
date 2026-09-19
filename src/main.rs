@@ -2,7 +2,6 @@ mod cli;
 mod client;
 mod db;
 mod gitmeta;
-mod ids;
 mod notifications;
 mod pdf;
 mod policy;
@@ -11,10 +10,9 @@ mod render;
 mod server;
 mod storage;
 mod tui;
-mod types;
 
 use clap::{Parser, Subcommand};
-use sha2::{Digest, Sha256};
+use keryx_core::{ids, types};
 
 #[derive(Parser)]
 #[command(
@@ -60,10 +58,6 @@ enum Command {
     },
     /// Browse drafts interactively
     Tui(tui::TuiArgs),
-}
-
-pub fn sha256_hex(value: &str) -> String {
-    hex::encode(Sha256::digest(value.as_bytes()))
 }
 
 fn main() {

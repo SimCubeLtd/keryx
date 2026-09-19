@@ -1,8 +1,8 @@
 [workspace]
-members = ["."]
+members = [".", "crates/*"]
 # Plain `cargo test` / `cargo clippy` must cover every crate, not only the
 # root binary, so CI and local habits keep working unchanged.
-default-members = ["."]
+default-members = [".", "crates/*"]
 resolver = "2"
 
 [workspace.package]
@@ -14,6 +14,8 @@ repository = "https://github.com/SimCubeLtd/keryx"
 # Every dependency is declared once here, so no crate can drift onto another
 # version or feature set by accident. Crates opt in with `workspace = true`.
 [workspace.dependencies]
+keryx-core = { path = "crates/keryx-core" }
+
 anyhow = "1"
 axum = "0.8"
 base64 = "0.22"
@@ -49,6 +51,8 @@ description = "Keryx (κῆρυξ): a self-hosted herald for agents — publish 
 repository.workspace = true
 
 [dependencies]
+keryx-core.workspace = true
+
 anyhow.workspace = true
 axum.workspace = true
 base64.workspace = true

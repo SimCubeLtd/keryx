@@ -2545,6 +2545,7 @@ dependencies = [
  "fulgur",
  "futures-util",
  "hex",
+ "keryx-core",
  "open",
  "rand 0.9.5",
  "ratatui",
@@ -2560,6 +2561,18 @@ dependencies = [
  "usvg",
  "web-push-native",
  "woff2-patched",
+]
+
+[[package]]
+name = "keryx-core"
+version = "0.5.1"
+dependencies = [
+ "chrono",
+ "hex",
+ "rand 0.9.5",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]

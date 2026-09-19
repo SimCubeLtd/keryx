@@ -220,7 +220,7 @@ pub fn upload(args: UploadArgs) -> Result<()> {
             public_url: response.public_url.clone(),
             raw_url: response.raw_url.clone(),
             latest_version_number: response.version_number,
-            updated_at: crate::db::now(),
+            updated_at: keryx_core::now(),
         },
     );
     crate::client::write_drafts(&drafts)?;
@@ -361,7 +361,7 @@ pub fn parse_duration(value: &str) -> Result<Duration> {
 pub fn snooze(args: SnoozeArgs) -> Result<()> {
     let api = Api::from_args(args.api_url.as_deref())?;
     let until = match (&args.duration, &args.until) {
-        (Some(duration), _) => crate::db::format_timestamp(Utc::now() + parse_duration(duration)?),
+        (Some(duration), _) => keryx_core::format_timestamp(Utc::now() + parse_duration(duration)?),
         (None, Some(until)) => until.clone(),
         (None, None) => bail!("pass --for <duration> or --until <RFC3339>"),
     };

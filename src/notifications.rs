@@ -89,7 +89,7 @@ impl VapidIdentity {
         let stored = StoredVapid {
             private_key: URL_SAFE_NO_PAD.encode(identity.key_pair.to_bytes()),
             public_key: identity.public_key.clone(),
-            created_at: db::now(),
+            created_at: keryx_core::now(),
         };
         std::fs::write(
             &path,
@@ -345,7 +345,7 @@ pub fn apply_outcome(
                     key,
                     subscription,
                     attempts,
-                    &db::format_timestamp(next),
+                    &keryx_core::format_timestamp(next),
                 )?;
             }
         }
@@ -390,7 +390,7 @@ pub async fn run_dispatcher(
         .expect("reqwest client");
 
     loop {
-        let now = db::now();
+        let now = keryx_core::now();
         let (due, dashboard_changed) = {
             let mut conn = db.lock().unwrap();
             let dashboard_changed = match db::record_due_wakes(&mut conn, &now) {
@@ -448,7 +448,7 @@ pub async fn run_dispatcher(
         let next = {
             let conn = db.lock().unwrap();
             [
-                db::next_wake_at(&conn, &db::now()).ok().flatten(),
+                db::next_wake_at(&conn, &keryx_core::now()).ok().flatten(),
                 db::next_delivery_at(&conn).ok().flatten(),
             ]
             .into_iter()
@@ -604,7 +604,7 @@ mod tests {
 
         let delivery = db::due_deliveries(&conn, far_future, 10).unwrap().remove(0);
         apply_outcome(&conn, &delivery, DeliveryOutcome::Retry).unwrap();
-        assert!(db::due_deliveries(&conn, &db::now(), 10)
+        assert!(db::due_deliveries(&conn, &keryx_core::now(), 10)
             .unwrap()
             .is_empty());
         let retried = db::due_deliveries(&conn, far_future, 10).unwrap().remove(0);

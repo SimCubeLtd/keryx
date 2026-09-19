@@ -140,7 +140,7 @@ pub fn run(args: ServeArgs) -> Result<()> {
         db: Arc::new(Mutex::new(conn)),
         store: BlobStore::new(data_dir.clone()),
         public_base_url,
-        api_key_hash: args.api_key.as_deref().map(crate::sha256_hex),
+        api_key_hash: args.api_key.as_deref().map(keryx_core::sha256_hex),
         policy: args.policy(),
         csp: draft_csp(&args.policy()),
         push: Arc::new(PushHub::new(vapid, push_contact)),
@@ -297,7 +297,7 @@ fn authorized(state: &AppState, headers: &HeaderMap) -> bool {
         return false;
     };
     // Hash both sides so the comparison is constant-time in the token bytes.
-    crate::sha256_hex(&token) == *expected
+    keryx_core::sha256_hex(&token) == *expected
 }
 
 fn bearer_token(headers: &HeaderMap) -> Option<String> {
@@ -1050,7 +1050,7 @@ mod tests {
             db: Arc::new(Mutex::new(conn)),
             store,
             public_base_url: Some("https://keryx.test".into()),
-            api_key_hash: Some(crate::sha256_hex("secret")),
+            api_key_hash: Some(keryx_core::sha256_hex("secret")),
             policy: PolicyOptions::default(),
             csp: draft_csp(&PolicyOptions::default()),
             push: Arc::new(PushHub::new(
