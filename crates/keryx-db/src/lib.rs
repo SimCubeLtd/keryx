@@ -2,6 +2,9 @@
 //! live on disk (see storage.rs); each version row records the blob's
 //! object key.
 
+pub mod connect;
+pub mod migration;
+
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -29,82 +32,7 @@ pub fn open(path: &Path) -> Result<Connection> {
 }
 
 fn init(conn: &Connection) -> Result<()> {
-    conn.execute_batch(
-        r#"
-        CREATE TABLE IF NOT EXISTS drafts (
-            id TEXT PRIMARY KEY,
-            title TEXT NOT NULL,
-            description TEXT,
-            current_version_id TEXT,
-            repo_org TEXT,
-            repo_name TEXT,
-            repo_host TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            deleted_at TEXT,
-            disabled_at TEXT,
-            disabled_reason TEXT,
-            snoozed_until TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS draft_versions (
-            id TEXT PRIMARY KEY,
-            draft_id TEXT NOT NULL REFERENCES drafts(id),
-            version_number INTEGER NOT NULL,
-            object_key TEXT NOT NULL,
-            content_hash TEXT NOT NULL,
-            file_size INTEGER NOT NULL,
-            created_at TEXT NOT NULL,
-            repo_org TEXT,
-            repo_name TEXT,
-            repo_host TEXT,
-            source_ip TEXT,
-            user_agent TEXT,
-            cli_version TEXT,
-            git_branch TEXT,
-            git_commit_sha TEXT,
-            git_commit_subject TEXT,
-            git_dirty INTEGER,
-            original_filename TEXT,
-            has_inline_script INTEGER NOT NULL DEFAULT 0,
-            external_image_hosts TEXT NOT NULL DEFAULT '[]',
-            UNIQUE (draft_id, version_number)
-        );
-
-        CREATE INDEX IF NOT EXISTS draft_versions_draft_id_idx ON draft_versions(draft_id);
-        CREATE INDEX IF NOT EXISTS drafts_updated_at_idx ON drafts(updated_at);
-
-        CREATE TABLE IF NOT EXISTS push_subscriptions (
-            id TEXT PRIMARY KEY,
-            endpoint TEXT NOT NULL UNIQUE,
-            p256dh TEXT NOT NULL,
-            auth TEXT NOT NULL,
-            events TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS notification_events (
-            key TEXT PRIMARY KEY,
-            kind TEXT NOT NULL,
-            draft_id TEXT NOT NULL,
-            title TEXT NOT NULL,
-            body TEXT NOT NULL,
-            target TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS notification_deliveries (
-            event_key TEXT NOT NULL REFERENCES notification_events(key) ON DELETE CASCADE,
-            subscription_id TEXT NOT NULL REFERENCES push_subscriptions(id) ON DELETE CASCADE,
-            attempts INTEGER NOT NULL DEFAULT 0,
-            next_attempt_at TEXT NOT NULL,
-            PRIMARY KEY (event_key, subscription_id)
-        );
-
-        CREATE INDEX IF NOT EXISTS notification_deliveries_due_idx ON notification_deliveries(next_attempt_at);
-        "#,
-    )?;
+    conn.execute_batch(migration::SQLITE_BASELINE)?;
 
     // Schema version 1 moves repository provenance onto immutable versions.
     // The transaction makes the ALTER/backfill marker atomic across restarts.

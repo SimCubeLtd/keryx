@@ -3226,12 +3226,15 @@ name = "keryx-db"
 version = "0.5.1"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "keryx-core",
  "rusqlite",
  "sea-orm",
  "sea-orm-migration",
  "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

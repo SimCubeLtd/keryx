@@ -13,9 +13,14 @@ test-support = []
 
 [dependencies]
 anyhow.workspace = true
+async-trait.workspace = true
 chrono.workspace = true
 keryx-core.workspace = true
 rusqlite.workspace = true
 sea-orm.workspace = true
 sea-orm-migration.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio.workspace = true
