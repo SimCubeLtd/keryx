@@ -12,6 +12,7 @@ use serde_json::json;
 use keryx_client::gitmeta;
 use keryx_client::{read_auth, save_credentials, Api, CliAuth, DraftMapping};
 use keryx_core::types::{Availability, AvailabilityUpdate, DraftSummary};
+use keryx_db::DraftStore;
 use keryx_policy::validate_html;
 use keryx_server::{S3Args, StorageKind};
 use keryx_store::{BlobBackend, BlobRef, MigrateOptions};
@@ -606,7 +607,9 @@ pub struct StorageGcArgs {
 }
 
 impl StorageLocationArgs {
-    fn blob_records(&self) -> Result<Vec<keryx_db::BlobRecord>> {
+    /// Read through DraftStore rather than opening SQLite directly, so these
+    /// commands work on whatever database the server uses.
+    async fn blob_records(&self) -> Result<Vec<keryx_db::BlobRecord>> {
         let db_path = self
             .db
             .clone()
@@ -614,7 +617,8 @@ impl StorageLocationArgs {
         if !db_path.exists() {
             bail!("no database at {}", db_path.display());
         }
-        keryx_db::blob_records(&keryx_db::open(&db_path)?)
+        let (store, _) = keryx_db::SeaOrmStore::open_sqlite(&db_path, true).await?;
+        store.blob_records().await
     }
 
     async fn backend(&self, kind: StorageKind) -> Result<std::sync::Arc<dyn BlobBackend>> {
@@ -642,7 +646,8 @@ async fn storage_migrate(args: StorageMigrateArgs) -> Result<()> {
     }
     let refs = args
         .location
-        .blob_records()?
+        .blob_records()
+        .await?
         .into_iter()
         .map(|record| BlobRef {
             object_key: record.object_key,
@@ -704,7 +709,8 @@ async fn storage_migrate(args: StorageMigrateArgs) -> Result<()> {
 async fn storage_gc(args: StorageGcArgs) -> Result<()> {
     let owned = args
         .location
-        .blob_records()?
+        .blob_records()
+        .await?
         .into_iter()
         .map(|record| record.object_key)
         .collect();
