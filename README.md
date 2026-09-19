@@ -50,8 +50,9 @@ rewriting, no consent interstitials — to whoever holds the URL.
 - **Stay small** — one binary, a SQLite index for metadata (default
   `~/.keryx/keryx.db`), and the HTML stored as plain files on disk (default
   `~/.keryx/drafts/<draft-id>/<version-id>.html`) — easy to inspect, grep,
-  and back up. No external database, no object storage, no OAuth. A single
-  optional API key covers the private bits.
+  and back up. No external database, no OAuth, and no object storage unless
+  you [opt into S3](#storage). A single optional API key covers the private
+  bits.
 
 ## Build
 
@@ -63,6 +64,9 @@ The repository pins its Rust nightly in `rust-toolchain.toml`. CI runs
 `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
 `cargo build --all-targets`, `cargo test`, `cargo deny check`, and
 `cargo vet --locked` on that same toolchain.
+
+S3 support is a default Cargo feature. `cargo build --release
+--no-default-features` gives a lean, disk-only binary.
 
 `.cargo/config.toml` refuses crates.io releases younger than 14 days while
 resolving dependencies. If `cargo update` declines a version you expected,
@@ -79,7 +83,8 @@ keryx serve
 | `--port` / `KERYX_PORT` | `7812` | Listen port |
 | `--host` / `KERYX_HOST` | `127.0.0.1` | Bind address |
 | `--db` / `KERYX_DB` | `~/.keryx/keryx.db` | SQLite path (metadata index) |
-| `--data-dir` / `KERYX_DATA_DIR` | `~/.keryx` | Root for stored HTML files (written under `drafts/`) |
+| `--data-dir` / `KERYX_DATA_DIR` | `~/.keryx` | Local state: the push identity, the `.staging` write area, and the HTML files (under `drafts/`) when storage is `disk` |
+| `--storage` / `KERYX_STORAGE` | `disk` | Where draft HTML lives: `disk` or `s3`. See [Storage](#storage) |
 | `--public-base-url` / `KERYX_PUBLIC_BASE_URL` | request Host header | Base for returned links |
 | `--api-key` / `KERYX_API_KEY` | unset (open) | Require this Bearer key for mutations, listings, and PDFs |
 | `--max-html-bytes` / `KERYX_MAX_HTML_BYTES` | `524288` | Upload size cap |
@@ -103,6 +108,62 @@ Routes: `POST /api/uploads`, `GET/DELETE /api/drafts[/:id]`,
 `GET /api/push/vapid`, `PUT/DELETE /api/push/subscriptions`,
 `GET /d/:id[/raw]`, `GET /d/:id/v/:n[/raw]`, `GET /manifest.webmanifest`,
 `GET /sw.js`, `GET /healthz`.
+
+## Storage
+
+Draft HTML is stored as opaque objects, on local disk by default or in any
+S3-compatible store: AWS, RustFS, MinIO, Ceph RGW, Cloudflare R2, Backblaze
+B2. The flags below are ignored unless `--storage s3`.
+
+| Flag / env | Default | Purpose |
+| --- | --- | --- |
+| `--s3-bucket` / `KERYX_S3_BUCKET` | unset | Required when storage is `s3` |
+| `--s3-region` / `KERYX_S3_REGION` | `us-east-1` | Region, or the placeholder most S3-compatible endpoints accept |
+| `--s3-endpoint` / `KERYX_S3_ENDPOINT` | AWS | Custom endpoint, addressed path-style. Falls back to `AWS_ENDPOINT_URL_S3` |
+| `--s3-prefix` / `KERYX_S3_PREFIX` | empty | Key prefix inside the bucket. Never stored in the database, so it can change freely |
+| `--s3-profile` / `KERYX_S3_PROFILE` | unset | Named AWS profile for credential lookup |
+
+Credentials are never Keryx flags. They resolve through the standard AWS
+chain: environment variables, the shared profile, SSO, `credential_process`,
+web identity, ECS, then IMDS.
+
+At startup Keryx writes and deletes one probe object and refuses to boot if
+that fails, so a wrong bucket or a read-only credential never surfaces as a
+500 on the first upload. The credential needs exactly four permissions on
+the prefix: `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` on
+`arn:aws:s3:::<bucket>/<prefix>/*`, and `s3:ListBucket` on the bucket.
+
+**One server per database.** Moving blobs to S3 does not make Keryx
+multi-node. The SQLite index is still local and still the single source of
+truth, so two servers pointed at one bucket would mint divergent histories
+and purge each other's objects. Run exactly one.
+
+### Moving between stores
+
+Object keys are identical on every backend, so moving is a verified copy and
+never rewrites a database row. Stop the server first.
+
+```sh
+keryx storage migrate --from disk --to s3 --dry-run
+keryx storage migrate --from disk --to s3
+keryx serve --storage s3            # check it, then, optionally:
+keryx storage migrate --from disk --to s3 --remove-source
+```
+
+Each object is read back from the destination and checked against the sha256
+recorded at upload. Objects already present with the recorded size are
+skipped, so an interrupted run resumes by re-running it. Any failure exits
+non-zero and leaves the source untouched. `--from s3 --to disk` works the
+same way. `storage` commands take the same `--db`, `--data-dir` and `--s3-*`
+flags and environment variables as `serve`.
+
+### Orphaned objects
+
+Blob removal is best-effort, and an upload writes its object before its
+database row, so a failed delete or a failed upload can leave an object no
+version owns. `keryx storage gc [--storage s3]` lists them; `--delete`
+removes them. Objects younger than one hour are always left alone, so gc can
+never take a version that is about to commit.
 
 ## CLI
 
