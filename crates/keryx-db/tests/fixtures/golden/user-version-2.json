@@ -1,0 +1,246 @@
+{
+  "blobs": [
+    [
+      "drafts/deleted00001/verDeleted1aaaaaaaaa.html",
+      "hash-deleted-1",
+      50
+    ],
+    [
+      "drafts/disabled0001/verDisabled1aaaaaaaa.html",
+      "hash-disabled-1",
+      75
+    ],
+    [
+      "drafts/livedraft001/verLive1aaaaaaaaaaaa.html",
+      "hash-live-1",
+      120
+    ],
+    [
+      "drafts/livedraft001/verLive2aaaaaaaaaaaa.html",
+      "hash-live-2",
+      5000000000
+    ],
+    [
+      "drafts/snoozed00001/verSnoozed1aaaaaaaaa.html",
+      "hash-snoozed-1",
+      90
+    ]
+  ],
+  "drafts": {
+    "deleted00001": {
+      "summary": null,
+      "versions": [
+        {
+          "createdAt": "2026-01-03T10:00:00.000Z",
+          "fileSize": 50,
+          "gitBranch": null,
+          "gitCommitSha": null,
+          "gitCommitSubject": null,
+          "gitDirty": null,
+          "id": "verDeleted1aaaaaaaaa",
+          "originalFilename": null,
+          "repoHost": null,
+          "repoName": null,
+          "repoOrg": null,
+          "versionNumber": 1
+        }
+      ]
+    },
+    "disabled0001": {
+      "summary": {
+        "createdAt": "2026-01-05T10:00:00.000Z",
+        "description": "Off for now",
+        "disabled": true,
+        "draftId": "disabled0001",
+        "latestGitBranch": "main",
+        "latestGitCommitSha": "ccc333",
+        "latestGitCommitSubject": "third",
+        "latestGitDirty": null,
+        "latestVersionAt": "2026-01-05T10:00:00.000Z",
+        "latestVersionNumber": 1,
+        "publicUrl": "",
+        "rawUrl": "",
+        "repoHost": "gitlab.com",
+        "repoName": "widgets",
+        "repoOrg": "acme",
+        "snoozedUntil": null,
+        "title": "Disabled plan",
+        "updatedAt": "2026-01-05T10:00:00.000Z",
+        "versionCount": 1
+      },
+      "versions": [
+        {
+          "createdAt": "2026-01-05T10:00:00.000Z",
+          "fileSize": 75,
+          "gitBranch": "main",
+          "gitCommitSha": "ccc333",
+          "gitCommitSubject": "third",
+          "gitDirty": null,
+          "id": "verDisabled1aaaaaaaa",
+          "originalFilename": null,
+          "repoHost": "gitlab.com",
+          "repoName": "widgets",
+          "repoOrg": "acme",
+          "versionNumber": 1
+        }
+      ]
+    },
+    "livedraft001": {
+      "summary": {
+        "createdAt": "2026-01-01T10:00:00.000Z",
+        "description": "Two versions",
+        "disabled": false,
+        "draftId": "livedraft001",
+        "latestGitBranch": "feat/x",
+        "latestGitCommitSha": "bbb222",
+        "latestGitCommitSubject": "second",
+        "latestGitDirty": true,
+        "latestVersionAt": "2026-01-02T10:00:00.000Z",
+        "latestVersionNumber": 2,
+        "publicUrl": "",
+        "rawUrl": "",
+        "repoHost": "github.com",
+        "repoName": "keryx",
+        "repoOrg": "SimCubeLtd",
+        "snoozedUntil": null,
+        "title": "Live plan",
+        "updatedAt": "2026-01-02T10:00:00.000Z",
+        "versionCount": 2
+      },
+      "versions": [
+        {
+          "createdAt": "2026-01-02T10:00:00.000Z",
+          "fileSize": 5000000000,
+          "gitBranch": "feat/x",
+          "gitCommitSha": "bbb222",
+          "gitCommitSubject": "second",
+          "gitDirty": true,
+          "id": "verLive2aaaaaaaaaaaa",
+          "originalFilename": "plan.html",
+          "repoHost": "github.com",
+          "repoName": "keryx",
+          "repoOrg": "SimCubeLtd",
+          "versionNumber": 2
+        },
+        {
+          "createdAt": "2026-01-01T10:00:00.000Z",
+          "fileSize": 120,
+          "gitBranch": "main",
+          "gitCommitSha": "aaa111",
+          "gitCommitSubject": "first",
+          "gitDirty": false,
+          "id": "verLive1aaaaaaaaaaaa",
+          "originalFilename": "plan.html",
+          "repoHost": null,
+          "repoName": null,
+          "repoOrg": null,
+          "versionNumber": 1
+        }
+      ]
+    },
+    "snoozed00001": {
+      "summary": {
+        "createdAt": "2026-01-07T10:00:00.000Z",
+        "description": null,
+        "disabled": false,
+        "draftId": "snoozed00001",
+        "latestGitBranch": null,
+        "latestGitCommitSha": null,
+        "latestGitCommitSubject": null,
+        "latestGitDirty": null,
+        "latestVersionAt": "2026-01-07T10:00:00.000Z",
+        "latestVersionNumber": 1,
+        "publicUrl": "",
+        "rawUrl": "",
+        "repoHost": "github.com",
+        "repoName": "synapse",
+        "repoOrg": "SimCubeLtd",
+        "snoozedUntil": "2099-01-01T08:00:00.000Z",
+        "title": "Snoozed plan",
+        "updatedAt": "2026-01-07T10:00:00.000Z",
+        "versionCount": 1
+      },
+      "versions": [
+        {
+          "createdAt": "2026-01-07T10:00:00.000Z",
+          "fileSize": 90,
+          "gitBranch": null,
+          "gitCommitSha": null,
+          "gitCommitSubject": null,
+          "gitDirty": null,
+          "id": "verSnoozed1aaaaaaaaa",
+          "originalFilename": null,
+          "repoHost": "github.com",
+          "repoName": "synapse",
+          "repoOrg": "SimCubeLtd",
+          "versionNumber": 1
+        }
+      ]
+    }
+  },
+  "listing": [
+    {
+      "createdAt": "2026-01-07T10:00:00.000Z",
+      "description": null,
+      "disabled": false,
+      "draftId": "snoozed00001",
+      "latestGitBranch": null,
+      "latestGitCommitSha": null,
+      "latestGitCommitSubject": null,
+      "latestGitDirty": null,
+      "latestVersionAt": "2026-01-07T10:00:00.000Z",
+      "latestVersionNumber": 1,
+      "publicUrl": "",
+      "rawUrl": "",
+      "repoHost": "github.com",
+      "repoName": "synapse",
+      "repoOrg": "SimCubeLtd",
+      "snoozedUntil": "2099-01-01T08:00:00.000Z",
+      "title": "Snoozed plan",
+      "updatedAt": "2026-01-07T10:00:00.000Z",
+      "versionCount": 1
+    },
+    {
+      "createdAt": "2026-01-05T10:00:00.000Z",
+      "description": "Off for now",
+      "disabled": true,
+      "draftId": "disabled0001",
+      "latestGitBranch": "main",
+      "latestGitCommitSha": "ccc333",
+      "latestGitCommitSubject": "third",
+      "latestGitDirty": null,
+      "latestVersionAt": "2026-01-05T10:00:00.000Z",
+      "latestVersionNumber": 1,
+      "publicUrl": "",
+      "rawUrl": "",
+      "repoHost": "gitlab.com",
+      "repoName": "widgets",
+      "repoOrg": "acme",
+      "snoozedUntil": null,
+      "title": "Disabled plan",
+      "updatedAt": "2026-01-05T10:00:00.000Z",
+      "versionCount": 1
+    },
+    {
+      "createdAt": "2026-01-01T10:00:00.000Z",
+      "description": "Two versions",
+      "disabled": false,
+      "draftId": "livedraft001",
+      "latestGitBranch": "feat/x",
+      "latestGitCommitSha": "bbb222",
+      "latestGitCommitSubject": "second",
+      "latestGitDirty": true,
+      "latestVersionAt": "2026-01-02T10:00:00.000Z",
+      "latestVersionNumber": 2,
+      "publicUrl": "",
+      "rawUrl": "",
+      "repoHost": "github.com",
+      "repoName": "keryx",
+      "repoOrg": "SimCubeLtd",
+      "snoozedUntil": null,
+      "title": "Live plan",
+      "updatedAt": "2026-01-02T10:00:00.000Z",
+      "versionCount": 2
+    }
+  ]
+}

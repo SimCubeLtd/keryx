@@ -1,0 +1,157 @@
+{
+  "blobs": [
+    [
+      "drafts/g3q1hbw3lw0c/9zuAQ57ES2EZjlq4dx2o.html",
+      "84c35bb84eaa5c0484ebbc20271bafb61a9c3ccc32872512671af6426a6b5426",
+      98
+    ],
+    [
+      "drafts/g3q1hbw3lw0c/MrTRWmNpwE89zhqPe1pv.html",
+      "bb7be5e9764db8cb44fccdd94bbc37e4b49a26c9ae02bb1db6685530532aac5c",
+      108
+    ],
+    [
+      "drafts/w5s7hqmozxa6/P8bLhVEEl4NCY28fvZ4G.html",
+      "1c9f4db98073d581a5f50abc7bcb6dec80230bab87221c2938d17bf275f87f6f",
+      90
+    ]
+  ],
+  "drafts": {
+    "g3q1hbw3lw0c": {
+      "summary": {
+        "createdAt": "2026-09-19T18:05:59.804Z",
+        "description": null,
+        "disabled": false,
+        "draftId": "g3q1hbw3lw0c",
+        "latestGitBranch": null,
+        "latestGitCommitSha": null,
+        "latestGitCommitSubject": null,
+        "latestGitDirty": null,
+        "latestVersionAt": "2026-09-19T18:05:59.837Z",
+        "latestVersionNumber": 2,
+        "publicUrl": "",
+        "rawUrl": "",
+        "repoHost": null,
+        "repoName": null,
+        "repoOrg": null,
+        "snoozedUntil": null,
+        "title": "Plan one",
+        "updatedAt": "2026-09-19T18:05:59.837Z",
+        "versionCount": 2
+      },
+      "versions": [
+        {
+          "createdAt": "2026-09-19T18:05:59.837Z",
+          "fileSize": 98,
+          "gitBranch": null,
+          "gitCommitSha": null,
+          "gitCommitSubject": null,
+          "gitDirty": null,
+          "id": "9zuAQ57ES2EZjlq4dx2o",
+          "originalFilename": "one-v2.html",
+          "repoHost": null,
+          "repoName": null,
+          "repoOrg": null,
+          "versionNumber": 2
+        },
+        {
+          "createdAt": "2026-09-19T18:05:59.804Z",
+          "fileSize": 108,
+          "gitBranch": null,
+          "gitCommitSha": null,
+          "gitCommitSubject": null,
+          "gitDirty": null,
+          "id": "MrTRWmNpwE89zhqPe1pv",
+          "originalFilename": "one.html",
+          "repoHost": null,
+          "repoName": null,
+          "repoOrg": null,
+          "versionNumber": 1
+        }
+      ]
+    },
+    "w5s7hqmozxa6": {
+      "summary": {
+        "createdAt": "2026-09-19T18:05:59.867Z",
+        "description": null,
+        "disabled": false,
+        "draftId": "w5s7hqmozxa6",
+        "latestGitBranch": null,
+        "latestGitCommitSha": null,
+        "latestGitCommitSubject": null,
+        "latestGitDirty": null,
+        "latestVersionAt": "2026-09-19T18:05:59.867Z",
+        "latestVersionNumber": 1,
+        "publicUrl": "",
+        "rawUrl": "",
+        "repoHost": null,
+        "repoName": null,
+        "repoOrg": null,
+        "snoozedUntil": null,
+        "title": "Plan two",
+        "updatedAt": "2026-09-19T18:05:59.867Z",
+        "versionCount": 1
+      },
+      "versions": [
+        {
+          "createdAt": "2026-09-19T18:05:59.867Z",
+          "fileSize": 90,
+          "gitBranch": null,
+          "gitCommitSha": null,
+          "gitCommitSubject": null,
+          "gitDirty": null,
+          "id": "P8bLhVEEl4NCY28fvZ4G",
+          "originalFilename": "two.html",
+          "repoHost": null,
+          "repoName": null,
+          "repoOrg": null,
+          "versionNumber": 1
+        }
+      ]
+    }
+  },
+  "listing": [
+    {
+      "createdAt": "2026-09-19T18:05:59.867Z",
+      "description": null,
+      "disabled": false,
+      "draftId": "w5s7hqmozxa6",
+      "latestGitBranch": null,
+      "latestGitCommitSha": null,
+      "latestGitCommitSubject": null,
+      "latestGitDirty": null,
+      "latestVersionAt": "2026-09-19T18:05:59.867Z",
+      "latestVersionNumber": 1,
+      "publicUrl": "",
+      "rawUrl": "",
+      "repoHost": null,
+      "repoName": null,
+      "repoOrg": null,
+      "snoozedUntil": null,
+      "title": "Plan two",
+      "updatedAt": "2026-09-19T18:05:59.867Z",
+      "versionCount": 1
+    },
+    {
+      "createdAt": "2026-09-19T18:05:59.804Z",
+      "description": null,
+      "disabled": false,
+      "draftId": "g3q1hbw3lw0c",
+      "latestGitBranch": null,
+      "latestGitCommitSha": null,
+      "latestGitCommitSubject": null,
+      "latestGitDirty": null,
+      "latestVersionAt": "2026-09-19T18:05:59.837Z",
+      "latestVersionNumber": 2,
+      "publicUrl": "",
+      "rawUrl": "",
+      "repoHost": null,
+      "repoName": null,
+      "repoOrg": null,
+      "snoozedUntil": null,
+      "title": "Plan one",
+      "updatedAt": "2026-09-19T18:05:59.837Z",
+      "versionCount": 2
+    }
+  ]
+}
