@@ -65,8 +65,9 @@ crates.io release rather than trusted as first-party code.
 
 ## Working with it
 
-Use cargo-vet 0.10.2 or newer (`cargo install cargo-vet --version 0.10.2
---locked`), the version CI pins. Older releases, including the 0.10.0 prebuilt
+Use cargo-vet 0.10.2 or newer, the version CI pins. Build it with stable
+(`cargo +stable install cargo-vet --version 0.10.2 --locked`): its lockfile
+pins a rustix that does not compile on current nightlies. Older releases, including the 0.10.0 prebuilt
 binary, cannot parse the `trusted-publisher` entries newer versions write to
 `imports.lock`.
 

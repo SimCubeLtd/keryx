@@ -91,11 +91,19 @@ jobs:
       # cargo-vet release is 0.10.0, which cannot parse the trusted-publisher
       # entries that 0.10.2 writes to imports.lock for crates published through
       # crates.io Trusted Publishing. CI must run the version that writes the
-      # files. rust-cache keeps ~/.cargo/bin, so this compiles once.
+      # files.
+      #
+      # Built with stable, not the repository's nightly: cargo-vet's own
+      # lockfile pins a rustix that turns on internal rustc attributes when it
+      # sees a nightly compiler, and current nightlies reject them. Only this
+      # tool build uses stable; Keryx itself stays on the pinned nightly.
+      # rust-cache keeps ~/.cargo/bin, so this compiles once.
       - name: Install cargo-vet
+        working-directory: ${{ runner.temp }}
         run: |
           if ! cargo vet --version 2>/dev/null | grep -qx "cargo-vet 0.10.2"; then
-            cargo install cargo-vet --version 0.10.2 --locked
+            rustup toolchain install stable --profile minimal
+            cargo +stable install cargo-vet --version 0.10.2 --locked
           fi
       - name: cargo deny
         run: cargo deny check
