@@ -58,3 +58,13 @@ jobs:
         run: cargo deny check
       - name: cargo vet
         run: cargo vet --locked
+      # ring is the only crypto backend. aws-lc-rs is a C build and a second
+      # TLS provider, and several dependencies switch it on by default.
+      - name: aws-lc-rs must never enter the build
+        run: |
+          for crate in aws-lc-rs aws-lc-sys; do
+            if cargo tree --workspace --all-features --target all -i "$crate" 2>/dev/null; then
+              echo "::error::$crate entered the dependency graph"
+              exit 1
+            fi
+          done

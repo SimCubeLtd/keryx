@@ -20,6 +20,7 @@ keryx-db = { path = "crates/keryx-db" }
 keryx-policy = { path = "crates/keryx-policy" }
 keryx-render = { path = "crates/keryx-render" }
 keryx-server = { path = "crates/keryx-server" }
+keryx-share = { path = "crates/keryx-share" }
 keryx-store = { path = "crates/keryx-store" }
 
 anyhow = "1"
@@ -30,9 +31,14 @@ chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
 crossterm = "0.29"
 dirs = "6"
+docker_credential = { version = "1.4", default-features = false }
 fulgur = "0.40"
 futures-util = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 hex = "0.4"
+# No TLS feature, deliberately: oci-client's rustls-tls switches on
+# reqwest/rustls and jsonwebtoken/aws_lc_rs, both of which hard-wire aws-lc-rs,
+# and native-tls means system OpenSSL. TLS arrives through Keryx's own reqwest.
+oci-client = { version = "0.17", default-features = false }
 open = "5"
 # OpenDAL is pinned: 0.59 has breaking changes against 0.58.2. The reqwest
 # transport's default feature would build the aws-lc-rs provider, so it takes
@@ -70,9 +76,11 @@ description = "Keryx (κῆρυξ): a self-hosted herald for agents — publish 
 repository.workspace = true
 
 [features]
-default = ["s3"]
+default = ["s3", "share"]
 # S3-compatible blob storage. --no-default-features gives a lean, disk-only build.
 s3 = ["keryx-server/s3"]
+# keryx share / pull / inspect: drafts as OCI artifacts in any registry.
+share = ["dep:keryx-share"]
 
 [dependencies]
 keryx-client.workspace = true
@@ -80,6 +88,7 @@ keryx-core.workspace = true
 keryx-db.workspace = true
 keryx-policy.workspace = true
 keryx-server.workspace = true
+keryx-share = { workspace = true, optional = true }
 keryx-store.workspace = true
 
 anyhow.workspace = true
