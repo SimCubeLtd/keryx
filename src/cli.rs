@@ -9,10 +9,10 @@ use chrono::{DateTime, Duration, Utc};
 use clap::{Args, Subcommand};
 use serde_json::json;
 
-use crate::client::{read_auth, save_credentials, Api, CliAuth, DraftMapping};
-use crate::gitmeta;
-use crate::policy::validate_html;
-use crate::types::{Availability, AvailabilityUpdate, DraftSummary};
+use keryx_client::gitmeta;
+use keryx_client::{read_auth, save_credentials, Api, CliAuth, DraftMapping};
+use keryx_core::types::{Availability, AvailabilityUpdate, DraftSummary};
+use keryx_policy::validate_html;
 
 #[derive(Args, Debug)]
 pub struct UploadArgs {
@@ -183,7 +183,7 @@ pub fn upload(args: UploadArgs) -> Result<()> {
         );
     }
 
-    let mut drafts = crate::client::read_drafts();
+    let mut drafts = keryx_client::read_drafts();
     let file_key = file.to_string_lossy().to_string();
     let known_draft_id = drafts.files.get(&file_key).map(|m| m.draft_id.clone());
     let draft_id = if args.new {
@@ -223,7 +223,7 @@ pub fn upload(args: UploadArgs) -> Result<()> {
             updated_at: keryx_core::now(),
         },
     );
-    crate::client::write_drafts(&drafts)?;
+    keryx_client::write_drafts(&drafts)?;
 
     println!(
         "{}",

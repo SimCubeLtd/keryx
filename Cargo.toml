@@ -59,40 +59,20 @@ repository.workspace = true
 [dependencies]
 keryx-client.workspace = true
 keryx-core.workspace = true
-keryx-db.workspace = true
 keryx-policy.workspace = true
 keryx-server.workspace = true
-keryx-store.workspace = true
 
 anyhow.workspace = true
-axum.workspace = true
-base64.workspace = true
 chrono.workspace = true
 clap.workspace = true
 crossterm.workspace = true
-dirs.workspace = true
-fulgur.workspace = true
-futures-util.workspace = true
-hex.workspace = true
 open.workspace = true
-rand.workspace = true
 ratatui.workspace = true
-reqwest.workspace = true
-rusqlite.workspace = true
-scraper.workspace = true
-serde.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
-tempfile.workspace = true
-tokio.workspace = true
-url.workspace = true
-usvg.workspace = true
-web-push-native.workspace = true
-woff2-patched.workspace = true
 
 [dev-dependencies]
-keryx-db = { workspace = true, features = ["test-support"] }
-keryx-store = { workspace = true, features = ["test-support"] }
+reqwest.workspace = true
+tempfile.workspace = true
 
 [profile.release]
 lto = true

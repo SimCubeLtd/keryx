@@ -2,11 +2,6 @@ mod cli;
 mod tui;
 
 use clap::{Parser, Subcommand};
-use keryx_client as client;
-use keryx_client::gitmeta;
-use keryx_core::types;
-use keryx_policy as policy;
-use keryx_server as server;
 
 #[derive(Parser)]
 #[command(
@@ -22,7 +17,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Run the keryx server
-    Serve(server::ServeArgs),
+    Serve(keryx_server::ServeArgs),
     /// Upload or update an HTML draft
     Upload(cli::UploadArgs),
     /// List published drafts
@@ -57,7 +52,7 @@ enum Command {
 fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
-        Command::Serve(args) => server::run(args),
+        Command::Serve(args) => keryx_server::run(args),
         Command::Upload(args) => cli::upload(args),
         Command::List(args) => cli::list(args),
         Command::Raw(args) => cli::raw(args),
