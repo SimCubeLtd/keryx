@@ -231,7 +231,7 @@ pub fn materialize_versioned_html(
     title: &str,
 ) -> Result<String> {
     let publication_date = publication_date(identity.version_created_at)?;
-    let escaped_title = crate::render::escape_html(title);
+    let escaped_title = crate::escape_html(title);
     let head = format!(
         r#"<meta name="keryx-draft-id" content="{}">
 <meta name="keryx-version" content="{}">

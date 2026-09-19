@@ -1,6 +1,9 @@
 //! HTTP server. One optional API key guards mutations, listings, and PDF
 //! publication; draft HTML serving remains public.
 
+mod notifications;
+mod realtime;
+
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -20,19 +23,19 @@ use rusqlite::Connection;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::db::{self, AvailabilityError, NewUpload, UploadError};
-use crate::notifications::{self, PushHub, VapidIdentity};
-use crate::pdf::{render_version_pdf, PdfIdentity};
-use crate::policy::{validate_html, PolicyOptions, DEFAULT_MAX_HTML_BYTES};
+use crate::notifications::{PushHub, VapidIdentity};
 use crate::realtime::DashboardUpdates;
-use crate::render::{
-    render_dashboard, render_dashboard_detail, render_dashboard_rows, render_not_found,
-};
-use crate::storage::BlobStore;
-use crate::types::{
+use keryx_core::types::{
     Availability, AvailabilityUpdate, DraftDetail, DraftSummary, PushSubscriptionInput,
     UploadMetadata, UploadResponse,
 };
+use keryx_db::{self as db, AvailabilityError, NewUpload, UploadError};
+use keryx_policy::{validate_html, PolicyOptions, DEFAULT_MAX_HTML_BYTES};
+use keryx_render::pdf::{render_version_pdf, PdfIdentity};
+use keryx_render::{
+    render_dashboard, render_dashboard_detail, render_dashboard_rows, render_not_found,
+};
+use keryx_store::BlobStore;
 
 #[derive(clap::Args, Debug)]
 pub struct ServeArgs {
@@ -1044,7 +1047,7 @@ mod tests {
 
     /// A protected server (API key "secret") on a throwaway store.
     fn test_state() -> SharedState {
-        let store = crate::storage::test_store();
+        let store = keryx_store::test_store();
         let conn = db::open(&store.root().join("test.db")).unwrap();
         Arc::new(AppState {
             db: Arc::new(Mutex::new(conn)),
@@ -1279,11 +1282,11 @@ mod tests {
         let input = |endpoint: &str| {
             Ok(Json(PushSubscriptionInput {
                 endpoint: endpoint.into(),
-                keys: crate::types::PushKeys {
+                keys: keryx_core::types::PushKeys {
                     p256dh: "BPUBLIC".into(),
                     auth: "AUTH".into(),
                 },
-                events: Some(vec![crate::types::NotificationKind::Woke]),
+                events: Some(vec![keryx_core::types::NotificationKind::Woke]),
             }))
         };
 

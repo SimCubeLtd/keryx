@@ -3,9 +3,11 @@
 //! script adds tab switching, search, selection, theme persistence, and
 //! management actions.
 
+pub mod pdf;
+
 use std::collections::BTreeSet;
 
-use crate::types::{Availability, DraftSummary};
+use keryx_core::types::{Availability, DraftSummary};
 
 const DASHBOARD_CSS: &str = include_str!("../assets/dashboard.css");
 const DASHBOARD_JS: &str = include_str!("../assets/dashboard.js");
@@ -151,10 +153,7 @@ fn render_row(draft: &DraftSummary, selected: bool, management_enabled: bool) ->
     )
 }
 
-pub(crate) fn render_dashboard_detail(
-    draft: Option<&DraftSummary>,
-    management_enabled: bool,
-) -> String {
+pub fn render_dashboard_detail(draft: Option<&DraftSummary>, management_enabled: bool) -> String {
     let Some(draft) = draft else {
         return r#"<aside class="detail empty" id="draft-detail"><div><h2>No drafts yet</h2><p>Publish one with <code>keryx upload ./plan.html</code>.</p></div></aside>"#.to_string();
     };
@@ -258,7 +257,7 @@ fn status_label(availability: Availability) -> &'static str {
     }
 }
 
-pub(crate) fn render_dashboard_rows(
+pub fn render_dashboard_rows(
     drafts: &[DraftSummary],
     selected_id: Option<&str>,
     management_enabled: bool,

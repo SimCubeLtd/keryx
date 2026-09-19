@@ -23,8 +23,8 @@ use web_push_native::jwt_simple::algorithms::{ECDSAP256PublicKeyLike, ES256KeyPa
 use web_push_native::p256::PublicKey;
 use web_push_native::{Auth, WebPushBuilder};
 
-use crate::db::{self, PendingDelivery};
 use crate::realtime::DashboardUpdates;
+use keryx_db::{self as db, PendingDelivery};
 
 const VAPID_FILE: &str = "vapid.json";
 /// Temporary failures are retried with doubling delays; after this many
@@ -465,7 +465,7 @@ pub async fn run_dispatcher(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{NotificationEvent, NotificationKind, PushKeys, PushSubscriptionInput};
+    use keryx_core::types::{NotificationEvent, NotificationKind, PushKeys, PushSubscriptionInput};
 
     #[test]
     fn classification_follows_rfc8030() {

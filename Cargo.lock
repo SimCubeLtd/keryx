@@ -2548,6 +2548,7 @@ dependencies = [
  "keryx-core",
  "keryx-db",
  "keryx-policy",
+ "keryx-server",
  "keryx-store",
  "open",
  "rand 0.9.5",
@@ -2597,6 +2598,47 @@ dependencies = [
  "scraper",
  "serde",
  "url",
+]
+
+[[package]]
+name = "keryx-render"
+version = "0.5.1"
+dependencies = [
+ "anyhow",
+ "base64",
+ "chrono",
+ "fulgur",
+ "keryx-core",
+ "scraper",
+ "usvg",
+ "woff2-patched",
+]
+
+[[package]]
+name = "keryx-server"
+version = "0.5.1"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64",
+ "chrono",
+ "clap",
+ "dirs",
+ "futures-util",
+ "keryx-core",
+ "keryx-db",
+ "keryx-policy",
+ "keryx-render",
+ "keryx-store",
+ "rand 0.9.5",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "url",
+ "web-push-native",
 ]
 
 [[package]]

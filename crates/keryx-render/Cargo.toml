@@ -1,0 +1,18 @@
+[package]
+name = "keryx-render"
+description = "Keryx dashboard HTML and PDF rendering."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+base64.workspace = true
+chrono.workspace = true
+fulgur.workspace = true
+keryx-core.workspace = true
+scraper.workspace = true
+usvg.workspace = true
+woff2-patched.workspace = true

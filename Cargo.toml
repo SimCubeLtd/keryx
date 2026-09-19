@@ -17,6 +17,8 @@ repository = "https://github.com/SimCubeLtd/keryx"
 keryx-core = { path = "crates/keryx-core" }
 keryx-db = { path = "crates/keryx-db" }
 keryx-policy = { path = "crates/keryx-policy" }
+keryx-render = { path = "crates/keryx-render" }
+keryx-server = { path = "crates/keryx-server" }
 keryx-store = { path = "crates/keryx-store" }
 
 anyhow = "1"
@@ -57,6 +59,7 @@ repository.workspace = true
 keryx-core.workspace = true
 keryx-db.workspace = true
 keryx-policy.workspace = true
+keryx-server.workspace = true
 keryx-store.workspace = true
 
 anyhow.workspace = true
