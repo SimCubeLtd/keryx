@@ -3189,6 +3189,7 @@ version = "0.5.1"
 dependencies = [
  "anyhow",
  "dirs",
+ "keryx-config",
  "keryx-core",
  "keryx-policy",
  "reqwest",

@@ -24,7 +24,9 @@ pub fn state_dir() -> PathBuf {
         .join(".keryx")
 }
 
-fn config_path() -> PathBuf {
+/// Where the client kept its API URL before config.toml. Migrated away on
+/// first use; see [`migrate_legacy_config`].
+fn legacy_config_path() -> PathBuf {
     state_dir().join("config.json")
 }
 
@@ -95,11 +97,13 @@ pub fn write_drafts(drafts: &DraftMappings) -> Result<()> {
     write_json(&drafts_path(), drafts)
 }
 
+/// Save the API key, and the API URL when one is given. The key goes to
+/// ~/.keryx/credentials.json (owner-readable only); the URL is ordinary
+/// config and goes to config.toml as `client.api_url`.
 pub fn save_credentials(api_key: Option<&str>, api_url_override: Option<&str>) -> Result<()> {
     if let Some(url) = api_url_override {
-        let mut config: CliConfig = read_json(&config_path());
-        config.api_url = Some(url.trim_end_matches('/').to_string());
-        write_json(&config_path(), &config)?;
+        let config_file = keryx_config::get().path.as_deref();
+        keryx_config::set_client_api_url(config_file, url.trim_end_matches('/'))?;
     }
     write_json(
         &credentials_path(),
@@ -110,20 +114,72 @@ pub fn save_credentials(api_key: Option<&str>, api_url_override: Option<&str>) -
     )
 }
 
+/// Older clients kept the API URL in ~/.keryx/config.json. One config file is
+/// enough, so the first run that finds the JSON moves its `apiUrl` into
+/// config.toml as `client.api_url` and deletes it. A URL already in the TOML
+/// wins and the JSON is simply dropped.
+///
+/// Answers the URL to use for this run when the JSON supplied one. If the
+/// TOML cannot be written the JSON is left in place, so nothing is lost.
+fn migrate_legacy_config(
+    legacy: &std::path::Path,
+    config_file: Option<&std::path::Path>,
+    toml_has_api_url: bool,
+) -> Option<String> {
+    if !legacy.is_file() {
+        return None;
+    }
+    let api_url = read_json::<CliConfig>(&legacy.to_path_buf()).api_url;
+    let carried = match (&api_url, toml_has_api_url) {
+        (Some(url), false) => match keryx_config::set_client_api_url(config_file, url) {
+            Ok(written) => {
+                eprintln!(
+                    "Moved the API URL from {} to {} (client.api_url).",
+                    legacy.display(),
+                    written.display()
+                );
+                true
+            }
+            Err(error) => {
+                eprintln!(
+                    "Warning: could not move {} into config.toml: {error:#}",
+                    legacy.display()
+                );
+                return api_url;
+            }
+        },
+        _ => false,
+    };
+    let _ = std::fs::remove_file(legacy);
+    if carried {
+        api_url
+    } else {
+        None
+    }
+}
+
 pub struct CliAuth {
     pub api_url: String,
     pub api_key: Option<String>,
 }
 
-/// Resolution order: flag > KERYX_API_URL > ~/.keryx/config.json >
+/// Resolution order: flag > KERYX_API_URL > `client.api_url` in config.toml >
 /// default (localhost, since this is self-hosted).
 pub fn read_auth(api_url_override: Option<&str>) -> CliAuth {
-    let config: CliConfig = read_json(&config_path());
+    let loaded = keryx_config::get();
+    let configured = loaded.config.client.api_url.clone();
+    // A URL just migrated out of the old JSON is not in `loaded` yet.
+    let migrated = migrate_legacy_config(
+        &legacy_config_path(),
+        loaded.path.as_deref(),
+        configured.is_some(),
+    );
     let credentials: Credentials = read_json(&credentials_path());
     let api_url = api_url_override
         .map(str::to_string)
         .or_else(|| std::env::var("KERYX_API_URL").ok())
-        .or(config.api_url)
+        .or(configured)
+        .or(migrated)
         .unwrap_or_else(|| DEFAULT_API_URL.to_string())
         .trim_end_matches('/')
         .to_string();
@@ -491,5 +547,39 @@ mod tests {
         );
         assert!(select_version(versions(&[1]), Some(9)).is_none());
         assert!(select_version(versions(&[]), None).is_none());
+    }
+
+    #[test]
+    fn the_legacy_json_config_moves_into_the_toml_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let legacy = directory.path().join("config.json");
+        let toml = directory.path().join("config.toml");
+        std::fs::write(&toml, "# mine\n[server]\nport = 9000\n").unwrap();
+        std::fs::write(&legacy, r#"{"apiUrl":"http://myhost:7812"}"#).unwrap();
+
+        let carried = migrate_legacy_config(&legacy, Some(&toml), false);
+        assert_eq!(carried.as_deref(), Some("http://myhost:7812"));
+        assert!(!legacy.exists(), "the JSON is gone once migrated");
+        let config = keryx_config::load_file(&toml).unwrap();
+        assert_eq!(config.client.api_url.as_deref(), Some("http://myhost:7812"));
+        assert_eq!(config.server.port, Some(9000));
+        assert!(std::fs::read_to_string(&toml).unwrap().contains("# mine"));
+
+        // Nothing left to migrate.
+        assert_eq!(migrate_legacy_config(&legacy, Some(&toml), true), None);
+    }
+
+    #[test]
+    fn a_url_already_in_the_toml_wins_over_the_legacy_json() {
+        let directory = tempfile::tempdir().unwrap();
+        let legacy = directory.path().join("config.json");
+        let toml = directory.path().join("config.toml");
+        std::fs::write(&toml, "[client]\napi_url = \"http://chosen:7812\"\n").unwrap();
+        std::fs::write(&legacy, r#"{"apiUrl":"http://stale:7812"}"#).unwrap();
+
+        assert_eq!(migrate_legacy_config(&legacy, Some(&toml), true), None);
+        assert!(!legacy.exists());
+        let config = keryx_config::load_file(&toml).unwrap();
+        assert_eq!(config.client.api_url.as_deref(), Some("http://chosen:7812"));
     }
 }

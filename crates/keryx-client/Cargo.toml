@@ -10,6 +10,7 @@ publish = false
 [dependencies]
 anyhow.workspace = true
 dirs.workspace = true
+keryx-config.workspace = true
 keryx-core.workspace = true
 keryx-policy.workspace = true
 reqwest.workspace = true
