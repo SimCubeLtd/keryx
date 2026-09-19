@@ -288,6 +288,7 @@ pub fn run(args: ServeArgs) -> Result<()> {
         let dispatcher_db = state.db.clone();
         let dispatcher_hub = state.push.clone();
         let dashboard_updates = state.dashboard_updates.clone();
+        let shutdown_updates = state.dashboard_updates.clone();
         let app = build_router(state, args.max_html_bytes);
 
         let listener = tokio::net::TcpListener::bind(&addr)
@@ -336,16 +337,62 @@ pub fn run(args: ServeArgs) -> Result<()> {
             dispatcher_hub,
             dashboard_updates,
         ));
-        axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await?;
-        Ok(())
+        serve_until(listener, app, shutdown_updates, shutdown_signal()).await
     })
+}
+
+/// Serve until `shutdown` resolves, then shut down gracefully: stop accepting,
+/// end the live-update streams, and let in-flight requests finish.
+async fn serve_until(
+    listener: tokio::net::TcpListener,
+    app: Router,
+    updates: DashboardUpdates,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> Result<()> {
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(async move {
+        shutdown.await;
+        updates.close();
+    })
+    .await?;
+    Ok(())
+}
+
+/// Resolves on Ctrl-C or, on Unix, SIGTERM, which is what systemd and
+/// Kubernetes send. A second signal exits at once, so a terminal is never
+/// stuck behind a connection that refuses to finish.
+async fn shutdown_signal() {
+    wait_for_signal().await;
+    eprintln!("keryx shutting down; press Ctrl-C again to exit immediately");
+    tokio::spawn(async {
+        wait_for_signal().await;
+        std::process::exit(130);
+    });
+}
+
+async fn wait_for_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        match signal(SignalKind::terminate()) {
+            Ok(mut terminate) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = terminate.recv() => {}
+                }
+            }
+            Err(_) => {
+                let _ = tokio::signal::ctrl_c().await;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }
 
 fn build_router(state: SharedState, max_html_bytes: usize) -> Router {
@@ -548,17 +595,30 @@ async fn dashboard_events(
     State(state): State<SharedState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let stream = stream::unfold(
-        (state.dashboard_updates.subscribe(), true),
-        |(mut receiver, initial)| async move {
-            if !initial && receiver.changed().await.is_err() {
-                return None;
+        (
+            state.dashboard_updates.subscribe(),
+            state.dashboard_updates.clone(),
+            true,
+        ),
+        |(mut receiver, updates, initial)| async move {
+            if !initial {
+                // The stream ends when the server shuts down, so shutdown is
+                // not left waiting on a connection that never finishes.
+                tokio::select! {
+                    changed = receiver.changed() => {
+                        if changed.is_err() {
+                            return None;
+                        }
+                    }
+                    () = updates.closed() => return None,
+                }
             }
             let revision = *receiver.borrow_and_update();
             let event = Event::default()
                 .event("dashboard")
                 .id(revision.to_string())
                 .data("refresh");
-            Some((Ok(event), (receiver, false)))
+            Some((Ok(event), (receiver, updates, false)))
         },
     );
     Sse::new(stream).keep_alive(
@@ -1759,5 +1819,60 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// A dashboard tab holds a live-update stream that never finishes by
+    /// itself. Graceful shutdown waits for open connections, so without
+    /// ending that stream Ctrl-C hung for as long as the tab stayed open.
+    #[tokio::test]
+    async fn shutdown_completes_while_a_dashboard_live_update_stream_is_open() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let state = test_state().await;
+        let updates = state.dashboard_updates.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(serve_until(
+            listener,
+            build_router(state, 1024 * 1024),
+            updates,
+            async move {
+                let _ = stopped.await;
+            },
+        ));
+
+        // A browser's EventSource, reduced to its bytes.
+        let mut browser = tokio::net::TcpStream::connect(addr).await.unwrap();
+        browser
+            .write_all(b"GET /api/dashboard/events HTTP/1.1\r\nHost: keryx.test\r\nAccept: text/event-stream\r\n\r\n")
+            .await
+            .unwrap();
+        let mut received = Vec::new();
+        let mut buffer = [0u8; 1024];
+        while !String::from_utf8_lossy(&received).contains("event: dashboard") {
+            let n = browser.read(&mut buffer).await.unwrap();
+            assert!(n > 0, "the stream closed before its first event");
+            received.extend_from_slice(&buffer[..n]);
+        }
+        assert!(!server.is_finished());
+
+        stop.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .expect("shutdown hung behind the open live-update stream")
+            .unwrap()
+            .unwrap();
+
+        // The browser sees a clean end of stream, and will reconnect later.
+        let end = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if browser.read(&mut buffer).await.unwrap() == 0 {
+                    break;
+                }
+            }
+        })
+        .await;
+        assert!(end.is_ok(), "the live-update stream was not closed");
     }
 }
