@@ -94,6 +94,7 @@ share = ["dep:keryx-share"]
 
 [dependencies]
 keryx-client.workspace = true
+keryx-config.workspace = true
 keryx-core.workspace = true
 keryx-db.workspace = true
 keryx-policy.workspace = true

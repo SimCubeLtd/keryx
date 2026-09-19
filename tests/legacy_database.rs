@@ -37,6 +37,17 @@ impl Drop for Server {
     }
 }
 
+/// The built binary, cut off from the developer's own config.toml: tests must
+/// not change with whatever is in ~/.config/keryx on the machine running them.
+fn keryx_binary() -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_keryx"));
+    command
+        .env("XDG_CONFIG_HOME", "/nonexistent/keryx-tests")
+        .env("HOME", "/nonexistent/keryx-tests")
+        .env_remove("KERYX_CONFIG");
+    command
+}
+
 fn copy_dir(from: &Path, to: &Path) {
     std::fs::create_dir_all(to).unwrap();
     for entry in std::fs::read_dir(from).unwrap() {
@@ -65,7 +76,7 @@ fn serve(db: &Path, data_dir: &Path) -> Server {
         .local_addr()
         .unwrap()
         .port();
-    let child = Command::new(env!("CARGO_BIN_EXE_keryx"))
+    let child = keryx_binary()
         .args(["serve", "--port", &port.to_string()])
         .args(["--db", db.to_str().unwrap()])
         .args(["--data-dir", data_dir.to_str().unwrap()])
@@ -113,7 +124,7 @@ fn exercise(root: &Path, db: &Path, data_dir: &Path) -> Value {
     std::fs::write(&html_path, NEW_VERSION).unwrap();
     let home = root.join("home");
     std::fs::create_dir_all(&home).unwrap();
-    let upload = Command::new(env!("CARGO_BIN_EXE_keryx"))
+    let upload = keryx_binary()
         .args([
             "upload",
             html_path.to_str().unwrap(),

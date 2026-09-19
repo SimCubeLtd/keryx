@@ -16,6 +16,17 @@ impl Drop for Server {
     }
 }
 
+/// The built binary, cut off from the developer's own config.toml: tests must
+/// not change with whatever is in ~/.config/keryx on the machine running them.
+fn keryx_binary() -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_keryx"));
+    command
+        .env("XDG_CONFIG_HOME", "/nonexistent/keryx-tests")
+        .env("HOME", "/nonexistent/keryx-tests")
+        .env_remove("KERYX_CONFIG");
+    command
+}
+
 fn run_git(repo: &Path, args: &[&str]) {
     let output = Command::new("git")
         .args(args)
@@ -89,7 +100,7 @@ fn upload_captures_the_invocation_checkout_when_html_is_elsewhere() {
 
     let port = reserve_port();
     let base_url = format!("http://127.0.0.1:{port}");
-    let server = Command::new(env!("CARGO_BIN_EXE_keryx"))
+    let server = keryx_binary()
         .args([
             "serve",
             "--port",
@@ -104,7 +115,7 @@ fn upload_captures_the_invocation_checkout_when_html_is_elsewhere() {
     let _server = Server(server);
     wait_until_ready(&base_url);
 
-    let upload = Command::new(env!("CARGO_BIN_EXE_keryx"))
+    let upload = keryx_binary()
         .args([
             "upload",
             html_path.to_str().unwrap(),

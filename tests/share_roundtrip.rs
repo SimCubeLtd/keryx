@@ -31,8 +31,19 @@ impl Drop for Server {
     }
 }
 
+/// The built binary, cut off from the developer's own config.toml: tests must
+/// not change with whatever is in ~/.config/keryx on the machine running them.
+fn keryx_binary() -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_keryx"));
+    command
+        .env("XDG_CONFIG_HOME", "/nonexistent/keryx-tests")
+        .env("HOME", "/nonexistent/keryx-tests")
+        .env_remove("KERYX_CONFIG");
+    command
+}
+
 fn keryx(home: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_keryx"))
+    keryx_binary()
         .args(args)
         .env("HOME", home)
         .output()
@@ -75,7 +86,7 @@ fn a_shared_draft_is_usable_with_plain_oras_and_pulls_back_into_keryx() {
         .port();
     let base_url = format!("http://127.0.0.1:{port}");
     let _server = Server(
-        Command::new(env!("CARGO_BIN_EXE_keryx"))
+        keryx_binary()
             .args(["serve", "--port", &port.to_string()])
             .args(["--db", temp.path().join("keryx.db").to_str().unwrap()])
             .args(["--data-dir", temp.path().join("data").to_str().unwrap()])
