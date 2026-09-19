@@ -340,6 +340,14 @@ criteria = "safe-to-deploy"
 version = "0.1.16"
 criteria = "safe-to-deploy"
 
+[[exemptions.const_format]]
+version = "0.2.36"
+criteria = "safe-to-deploy"
+
+[[exemptions.const_format_proc_macros]]
+version = "0.2.34"
+criteria = "safe-to-deploy"
+
 [[exemptions.constant_time_eq]]
 version = "0.4.2"
 criteria = "safe-to-deploy"
@@ -524,6 +532,18 @@ criteria = "safe-to-deploy"
 version = "0.5.8"
 criteria = "safe-to-deploy"
 
+[[exemptions.derive_builder]]
+version = "0.20.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.derive_builder_core]]
+version = "0.20.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.derive_builder_macro]]
+version = "0.20.2"
+criteria = "safe-to-deploy"
+
 [[exemptions.derive_more]]
 version = "0.99.20"
 criteria = "safe-to-deploy"
@@ -562,6 +582,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.dlv-list]]
 version = "0.5.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.docker_credential]]
+version = "1.4.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.document-features]]
@@ -788,6 +812,10 @@ criteria = "safe-to-deploy"
 version = "0.4.3"
 criteria = "safe-to-deploy"
 
+[[exemptions.getset]]
+version = "0.1.7"
+criteria = "safe-to-deploy"
+
 [[exemptions.ghash]]
 version = "0.5.1"
 criteria = "safe-to-deploy"
@@ -886,6 +914,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.http]]
 version = "1.5.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.http-auth]]
+version = "0.1.10"
 criteria = "safe-to-deploy"
 
 [[exemptions.http-body]]
@@ -1084,6 +1116,10 @@ criteria = "safe-to-deploy"
 version = "0.3.104"
 criteria = "safe-to-deploy"
 
+[[exemptions.jsonwebtoken]]
+version = "10.4.0"
+criteria = "safe-to-deploy"
+
 [[exemptions.jwt-simple]]
 version = "0.12.17"
 criteria = "safe-to-deploy"
@@ -1102,6 +1138,14 @@ criteria = "safe-to-deploy"
 
 [[exemptions.keyboard-types]]
 version = "0.7.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.konst]]
+version = "0.2.20"
+criteria = "safe-to-deploy"
+
+[[exemptions.konst_macro_rules]]
+version = "0.2.19"
 criteria = "safe-to-deploy"
 
 [[exemptions.krilla]]
@@ -1346,6 +1390,18 @@ criteria = "safe-to-deploy"
 
 [[exemptions.objc2-foundation]]
 version = "0.3.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.oci-client]]
+version = "0.17.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.oci-spec]]
+version = "0.9.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.olpc-cjson]]
+version = "0.1.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.once_cell]]
@@ -2013,7 +2069,15 @@ version = "0.11.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.strum]]
+version = "0.27.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.strum]]
 version = "0.28.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.strum_macros]]
+version = "0.27.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.strum_macros]]
@@ -2228,6 +2292,10 @@ criteria = "safe-to-deploy"
 version = "0.1.44"
 criteria = "safe-to-deploy"
 
+[[exemptions.tracing-attributes]]
+version = "0.1.31"
+criteria = "safe-to-deploy"
+
 [[exemptions.tracing-core]]
 version = "0.1.36"
 criteria = "safe-to-deploy"
@@ -2250,6 +2318,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.uluru]]
 version = "3.1.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.unicase]]
+version = "2.9.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.unicode-bidi]]
@@ -2294,6 +2366,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.unicode-width]]
 version = "0.2.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.unicode-xid]]
+version = "0.2.6"
 criteria = "safe-to-deploy"
 
 [[exemptions.universal-hash]]
@@ -2626,6 +2702,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.zeroize]]
 version = "1.9.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.zeroize_derive]]
+version = "1.5.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.zerotrie]]
