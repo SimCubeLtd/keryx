@@ -1,12 +1,159 @@
 
 # cargo-vet imports lock
 
+[[publisher.aho-corasick]]
+version = "1.1.5"
+when = "2026-08-03"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
+[[publisher.anstream]]
+version = "1.0.0"
+when = "2026-02-11"
+user-id = 6743
+user-login = "epage"
+user-name = "Ed Page"
+
+[[publisher.anstyle]]
+version = "1.0.14"
+when = "2026-03-13"
+user-id = 6743
+user-login = "epage"
+user-name = "Ed Page"
+
+[[publisher.anstyle-parse]]
+version = "1.0.0"
+when = "2026-02-11"
+user-id = 6743
+user-login = "epage"
+user-name = "Ed Page"
+
+[[publisher.anstyle-query]]
+version = "1.1.5"
+when = "2025-11-13"
+user-id = 6743
+user-login = "epage"
+user-name = "Ed Page"
+
+[[publisher.anstyle-wincon]]
+version = "3.0.11"
+when = "2025-11-13"
+user-id = 6743
+user-login = "epage"
+user-name = "Ed Page"
+
+[[publisher.anyhow]]
+version = "1.0.104"
+when = "2026-07-18"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
+[[publisher.async-trait]]
+version = "0.1.92"
+when = "2026-08-08"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
+[[publisher.atomic]]
+version = "0.6.1"
+when = "2025-06-20"
+user-id = 2915
+user-login = "Amanieu"
+user-name = "Amanieu d'Antras"
+
+[[publisher.autocfg]]
+version = "1.5.1"
+when = "2026-05-22"
+user-id = 539
+user-login = "cuviper"
+user-name = "Josh Stone"
+
+[[publisher.axum]]
+version = "0.8.9"
+when = "2026-04-14"
+user-id = 6741
+user-login = "Darksonn"
+user-name = "Alice Ryhl"
+
 [[publisher.bumpalo]]
 version = "3.20.3"
 when = "2026-05-22"
 user-id = 696
 user-login = "fitzgen"
 user-name = "Nick Fitzgerald"
+
+[[publisher.by_address]]
+version = "1.2.1"
+when = "2024-03-27"
+user-id = 2017
+user-login = "mbrubeck"
+user-name = "Matt Brubeck"
+
+[[publisher.bytes]]
+version = "1.12.1"
+when = "2026-07-08"
+user-id = 6741
+user-login = "Darksonn"
+user-name = "Alice Ryhl"
+
+[[publisher.clap]]
+version = "4.6.6"
+when = "2026-08-06"
+user-id = 6743
+user-login = "epage"
+user-name = "Ed Page"
+
+[[publisher.clap_builder]]
+version = "4.6.6"
+when = "2026-08-06"
+user-id = 6743
+user-login = "epage"
+user-name = "Ed Page"
+
+[[publisher.clap_derive]]
+version = "4.6.4"
+when = "2026-07-21"
+user-id = 6743
+user-login = "epage"
+user-name = "Ed Page"
+
+[[publisher.clap_lex]]
+version = "1.1.0"
+when = "2026-03-12"
+user-id = 6743
+user-login = "epage"
+user-name = "Ed Page"
+
+[[publisher.colorchoice]]
+version = "1.0.5"
+when = "2026-03-13"
+user-id = 6743
+user-login = "epage"
+user-name = "Ed Page"
+
+[[publisher.config]]
+version = "0.15.25"
+when = "2026-06-26"
+user-id = 6743
+user-login = "epage"
+user-name = "Ed Page"
+
+[[publisher.dtoa]]
+version = "1.0.11"
+when = "2025-12-27"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
+[[publisher.either]]
+version = "1.17.0"
+when = "2026-07-24"
+user-id = 539
+user-login = "cuviper"
+user-name = "Josh Stone"
 
 [[publisher.encoding_rs]]
 version = "0.8.35"
@@ -21,6 +168,583 @@ when = "2026-03-18"
 user-id = 1281
 user-login = "nical"
 user-name = "Nicolas Silva"
+
+[[publisher.ff]]
+version = "0.13.1"
+when = "2025-03-09"
+user-id = 6289
+user-login = "str4d"
+user-name = "Jack Grigg"
+
+[[publisher.getopts]]
+version = "0.2.24"
+when = "2025-08-29"
+user-id = 55123
+user-login = "rust-lang-owner"
+
+[[publisher.glob]]
+version = "0.3.4"
+when = "2026-07-21"
+user-id = 55123
+user-login = "rust-lang-owner"
+
+[[publisher.hashbrown]]
+version = "0.14.5"
+when = "2024-04-28"
+user-id = 2915
+user-login = "Amanieu"
+user-name = "Amanieu d'Antras"
+
+[[publisher.hashbrown]]
+version = "0.15.2"
+when = "2024-11-25"
+user-id = 2915
+user-login = "Amanieu"
+user-name = "Amanieu d'Antras"
+
+[[publisher.http]]
+version = "1.5.0"
+when = "2026-07-29"
+user-id = 359
+user-login = "seanmonstar"
+user-name = "Sean McArthur"
+
+[[publisher.http-body]]
+version = "1.1.0"
+when = "2026-07-13"
+user-id = 359
+user-login = "seanmonstar"
+user-name = "Sean McArthur"
+
+[[publisher.http-body-util]]
+version = "0.1.4"
+when = "2026-07-13"
+user-id = 359
+user-login = "seanmonstar"
+user-name = "Sean McArthur"
+
+[[publisher.httparse]]
+version = "1.10.1"
+when = "2025-03-03"
+user-id = 359
+user-login = "seanmonstar"
+user-name = "Sean McArthur"
+
+[[publisher.hyper]]
+version = "1.11.0"
+when = "2026-07-20"
+user-id = 359
+user-login = "seanmonstar"
+user-name = "Sean McArthur"
+
+[[publisher.hyper-util]]
+version = "0.1.20"
+when = "2026-02-02"
+user-id = 359
+user-login = "seanmonstar"
+user-name = "Sean McArthur"
+
+[[publisher.indoc]]
+version = "2.0.7"
+when = "2025-10-21"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
+[[publisher.is_terminal_polyfill]]
+version = "1.70.2"
+when = "2025-10-21"
+user-id = 6743
+user-login = "epage"
+user-name = "Ed Page"
+
+[[publisher.itoa]]
+version = "1.0.18"
+when = "2026-03-20"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
+[[publisher.jiff]]
+version = "0.2.35"
+when = "2026-07-25"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
+[[publisher.jiff-core]]
+version = "0.1.0"
+when = "2026-07-19"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
+[[publisher.jiff-static]]
+version = "0.2.35"
+when = "2026-07-25"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
+[[publisher.jiff-tzdb]]
+version = "0.1.8"
+when = "2026-07-09"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
+[[publisher.jiff-tzdb-platform]]
+version = "0.1.3"
+when = "2025-03-23"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
+[[publisher.libc]]
+version = "0.2.189"
+when = "2026-07-21"
+user-id = 55123
+user-login = "rust-lang-owner"
+
+[[publisher.libm]]
+version = "0.2.16"
+when = "2026-01-24"
+user-id = 55123
+user-login = "rust-lang-owner"
+
+[[publisher.linux-raw-sys]]
+version = "0.12.1"
+when = "2025-12-23"
+user-id = 6825
+user-login = "sunfishcode"
+user-name = "Dan Gohman"
+
+[[publisher.lock_api]]
+version = "0.4.14"
+when = "2025-10-03"
+user-id = 2915
+user-login = "Amanieu"
+user-name = "Amanieu d'Antras"
+
+[[publisher.memchr]]
+version = "2.8.3"
+when = "2026-07-08"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
+[[publisher.mime]]
+version = "0.3.17"
+when = "2023-03-20"
+user-id = 359
+user-login = "seanmonstar"
+user-name = "Sean McArthur"
+
+[[publisher.mio]]
+version = "1.2.2"
+when = "2026-07-13"
+user-id = 6025
+user-login = "Thomasdezeeuw"
+user-name = "Thomas de Zeeuw"
+
+[[publisher.new_debug_unreachable]]
+version = "1.0.6"
+when = "2024-03-15"
+user-id = 2017
+user-login = "mbrubeck"
+user-name = "Matt Brubeck"
+
+[[publisher.num-bigint]]
+version = "0.4.8"
+when = "2026-07-05"
+user-id = 539
+user-login = "cuviper"
+user-name = "Josh Stone"
+
+[[publisher.num-complex]]
+version = "0.4.6"
+when = "2024-05-07"
+user-id = 539
+user-login = "cuviper"
+user-name = "Josh Stone"
+
+[[publisher.num-iter]]
+version = "0.1.46"
+when = "2026-07-07"
+user-id = 539
+user-login = "cuviper"
+user-name = "Josh Stone"
+
+[[publisher.num_cpus]]
+version = "1.17.0"
+when = "2025-05-30"
+user-id = 359
+user-login = "seanmonstar"
+user-name = "Sean McArthur"
+
+[[publisher.once_cell_polyfill]]
+version = "1.70.2"
+when = "2025-10-21"
+user-id = 6743
+user-login = "epage"
+user-name = "Ed Page"
+
+[[publisher.ordered-float]]
+version = "4.6.0"
+when = "2024-12-19"
+user-id = 2017
+user-login = "mbrubeck"
+user-name = "Matt Brubeck"
+
+[[publisher.parking_lot]]
+version = "0.12.5"
+when = "2025-10-03"
+user-id = 2915
+user-login = "Amanieu"
+user-name = "Amanieu d'Antras"
+
+[[publisher.parking_lot_core]]
+version = "0.9.12"
+when = "2025-10-03"
+user-id = 2915
+user-login = "Amanieu"
+user-name = "Amanieu d'Antras"
+
+[[publisher.paste]]
+version = "1.0.15"
+when = "2024-05-07"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
+[[publisher.phf]]
+version = "0.11.3"
+when = "2025-01-06"
+user-id = 51017
+user-login = "JohnTitor"
+user-name = "Yuki Okushi"
+
+[[publisher.phf]]
+version = "0.13.1"
+when = "2025-08-23"
+user-id = 51017
+user-login = "JohnTitor"
+user-name = "Yuki Okushi"
+
+[[publisher.phf_codegen]]
+version = "0.11.3"
+when = "2025-01-06"
+user-id = 51017
+user-login = "JohnTitor"
+user-name = "Yuki Okushi"
+
+[[publisher.phf_generator]]
+version = "0.11.3"
+when = "2025-01-06"
+user-id = 51017
+user-login = "JohnTitor"
+user-name = "Yuki Okushi"
+
+[[publisher.phf_generator]]
+version = "0.13.1"
+when = "2025-08-23"
+user-id = 51017
+user-login = "JohnTitor"
+user-name = "Yuki Okushi"
+
+[[publisher.phf_macros]]
+version = "0.11.3"
+when = "2025-01-06"
+user-id = 51017
+user-login = "JohnTitor"
+user-name = "Yuki Okushi"
+
+[[publisher.phf_macros]]
+version = "0.13.1"
+when = "2025-08-23"
+user-id = 51017
+user-login = "JohnTitor"
+user-name = "Yuki Okushi"
+
+[[publisher.phf_shared]]
+version = "0.11.3"
+when = "2025-01-06"
+user-id = 51017
+user-login = "JohnTitor"
+user-name = "Yuki Okushi"
+
+[[publisher.phf_shared]]
+version = "0.13.1"
+when = "2025-08-23"
+user-id = 51017
+user-login = "JohnTitor"
+user-name = "Yuki Okushi"
+
+[[publisher.proc-macro2]]
+version = "1.0.107"
+when = "2026-07-19"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
+[[publisher.rayon]]
+version = "1.12.0"
+when = "2026-04-14"
+user-id = 539
+user-login = "cuviper"
+user-name = "Josh Stone"
+
+[[publisher.regex]]
+version = "1.13.1"
+when = "2026-07-15"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
+[[publisher.regex-automata]]
+version = "0.4.18"
+when = "2026-08-04"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
+[[publisher.regex-syntax]]
+version = "0.8.11"
+when = "2026-06-09"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
+[[publisher.reqwest]]
+version = "0.13.4"
+when = "2026-05-25"
+user-id = 359
+user-login = "seanmonstar"
+user-name = "Sean McArthur"
+
+[[publisher.rustix]]
+version = "1.1.4"
+when = "2026-02-22"
+user-id = 6825
+user-login = "sunfishcode"
+user-name = "Dan Gohman"
+
+[[publisher.rustversion]]
+version = "1.0.23"
+when = "2026-07-07"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
+[[publisher.ryu]]
+version = "1.0.23"
+when = "2026-02-08"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
+[[publisher.same-file]]
+version = "1.0.6"
+when = "2020-01-11"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
+[[publisher.scopeguard]]
+version = "1.2.0"
+when = "2023-07-17"
+user-id = 2915
+user-login = "Amanieu"
+user-name = "Amanieu d'Antras"
+
+[[publisher.serde]]
+version = "1.0.229"
+when = "2026-07-18"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
+[[publisher.serde_core]]
+version = "1.0.229"
+when = "2026-07-18"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
+[[publisher.serde_derive]]
+version = "1.0.229"
+when = "2026-07-18"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
+[[publisher.serde_json]]
+version = "1.0.151"
+when = "2026-07-20"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
+[[publisher.serde_path_to_error]]
+version = "0.1.20"
+when = "2025-09-15"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
+[[publisher.slab]]
+version = "0.4.12"
+when = "2026-01-31"
+user-id = 6741
+user-login = "Darksonn"
+user-name = "Alice Ryhl"
+
+[[publisher.socket2]]
+version = "0.6.5"
+when = "2026-07-13"
+user-id = 6025
+user-login = "Thomasdezeeuw"
+user-name = "Thomas de Zeeuw"
+
+[[publisher.syn]]
+version = "1.0.109"
+when = "2023-02-24"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
+[[publisher.syn]]
+version = "2.0.119"
+when = "2026-07-15"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
+[[publisher.syn]]
+version = "3.0.3"
+when = "2026-07-22"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
+[[publisher.thiserror]]
+version = "2.0.20"
+when = "2026-08-08"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
+[[publisher.thiserror-impl]]
+version = "2.0.20"
+when = "2026-08-08"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
+[[publisher.thread_local]]
+version = "1.1.10"
+when = "2026-07-10"
+user-id = 2915
+user-login = "Amanieu"
+user-name = "Amanieu d'Antras"
+
+[[publisher.tokio]]
+version = "1.53.1"
+when = "2026-07-20"
+user-id = 6741
+user-login = "Darksonn"
+user-name = "Alice Ryhl"
+
+[[publisher.tokio-macros]]
+version = "2.7.2"
+when = "2026-07-29"
+user-id = 6741
+user-login = "Darksonn"
+user-name = "Alice Ryhl"
+
+[[publisher.tokio-stream]]
+version = "0.1.19"
+when = "2026-07-22"
+user-id = 6741
+user-login = "Darksonn"
+user-name = "Alice Ryhl"
+
+[[publisher.tokio-util]]
+version = "0.7.19"
+when = "2026-07-21"
+user-id = 6741
+user-login = "Darksonn"
+user-name = "Alice Ryhl"
+
+[[publisher.toml]]
+version = "1.1.5+spec-1.1.0"
+when = "2026-09-02"
+user-id = 6743
+user-login = "epage"
+user-name = "Ed Page"
+
+[[publisher.toml_edit]]
+version = "0.25.13+spec-1.1.0"
+when = "2026-07-14"
+user-id = 6743
+user-login = "epage"
+user-name = "Ed Page"
+
+[[publisher.toml_parser]]
+version = "1.1.3+spec-1.1.0"
+when = "2026-07-27"
+user-id = 6743
+user-login = "epage"
+user-name = "Ed Page"
+
+[[publisher.toml_writer]]
+version = "1.1.2+spec-1.1.0"
+when = "2026-07-14"
+user-id = 6743
+user-login = "epage"
+user-name = "Ed Page"
+
+[[publisher.tower]]
+version = "0.5.3"
+when = "2026-01-12"
+user-id = 359
+user-login = "seanmonstar"
+user-name = "Sean McArthur"
+
+[[publisher.tower-http]]
+version = "0.6.11"
+when = "2026-05-18"
+user-id = 359
+user-login = "seanmonstar"
+user-name = "Sean McArthur"
+
+[[publisher.ucd-trie]]
+version = "0.1.7"
+when = "2024-09-29"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
+[[publisher.uluru]]
+version = "3.1.0"
+when = "2024-04-08"
+user-id = 2017
+user-login = "mbrubeck"
+user-name = "Matt Brubeck"
+
+[[publisher.unicase]]
+version = "2.9.0"
+when = "2026-01-06"
+user-id = 359
+user-login = "seanmonstar"
+user-name = "Sean McArthur"
+
+[[publisher.unicode-ident]]
+version = "1.0.24"
+when = "2026-02-16"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
 
 [[publisher.unicode-normalization]]
 version = "0.1.25"
@@ -57,6 +781,20 @@ user-id = 4484
 user-login = "hsivonen"
 user-name = "Henri Sivonen"
 
+[[publisher.walkdir]]
+version = "2.5.0"
+when = "2024-03-01"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
+[[publisher.wasi]]
+version = "0.11.1+wasi-snapshot-preview1"
+when = "2025-06-10"
+user-id = 1
+user-login = "alexcrichton"
+user-name = "Alex Crichton"
+
 [[publisher.wasip2]]
 version = "1.0.4+wasi-0.2.12"
 when = "2026-06-12"
@@ -64,10 +802,185 @@ user-id = 1
 user-login = "alexcrichton"
 user-name = "Alex Crichton"
 
+[[publisher.winapi-util]]
+version = "0.1.11"
+when = "2025-09-07"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
+[[publisher.windows]]
+version = "0.58.0"
+when = "2024-07-03"
+user-id = 64539
+user-login = "kennykerr"
+user-name = "Kenny Kerr"
+
+[[publisher.windows-core]]
+version = "0.58.0"
+when = "2024-07-03"
+user-id = 64539
+user-login = "kennykerr"
+user-name = "Kenny Kerr"
+
+[[publisher.windows-core]]
+version = "0.62.2"
+when = "2025-10-06"
+user-id = 64539
+user-login = "kennykerr"
+user-name = "Kenny Kerr"
+
+[[publisher.windows-implement]]
+version = "0.58.0"
+when = "2024-07-03"
+user-id = 64539
+user-login = "kennykerr"
+user-name = "Kenny Kerr"
+
+[[publisher.windows-implement]]
+version = "0.60.2"
+when = "2025-10-06"
+user-id = 64539
+user-login = "kennykerr"
+user-name = "Kenny Kerr"
+
+[[publisher.windows-interface]]
+version = "0.58.0"
+when = "2024-07-03"
+user-id = 64539
+user-login = "kennykerr"
+user-name = "Kenny Kerr"
+
+[[publisher.windows-interface]]
+version = "0.59.3"
+when = "2025-10-06"
+user-id = 64539
+user-login = "kennykerr"
+user-name = "Kenny Kerr"
+
+[[publisher.windows-result]]
+version = "0.2.0"
+when = "2024-07-03"
+user-id = 64539
+user-login = "kennykerr"
+user-name = "Kenny Kerr"
+
+[[publisher.windows-result]]
+version = "0.4.1"
+when = "2025-10-06"
+user-id = 64539
+user-login = "kennykerr"
+user-name = "Kenny Kerr"
+
+[[publisher.windows-strings]]
+version = "0.1.0"
+when = "2024-07-03"
+user-id = 64539
+user-login = "kennykerr"
+user-name = "Kenny Kerr"
+
+[[publisher.windows-strings]]
+version = "0.5.1"
+when = "2025-10-06"
+user-id = 64539
+user-login = "kennykerr"
+user-name = "Kenny Kerr"
+
+[[publisher.windows-sys]]
+version = "0.52.0"
+when = "2023-11-15"
+user-id = 64539
+user-login = "kennykerr"
+user-name = "Kenny Kerr"
+
+[[publisher.windows-sys]]
+version = "0.61.2"
+when = "2025-10-06"
+user-id = 64539
+user-login = "kennykerr"
+user-name = "Kenny Kerr"
+
+[[publisher.windows-targets]]
+version = "0.52.6"
+when = "2024-07-03"
+user-id = 64539
+user-login = "kennykerr"
+user-name = "Kenny Kerr"
+
+[[publisher.windows_aarch64_gnullvm]]
+version = "0.52.6"
+when = "2024-07-03"
+user-id = 64539
+user-login = "kennykerr"
+user-name = "Kenny Kerr"
+
+[[publisher.windows_aarch64_msvc]]
+version = "0.52.6"
+when = "2024-07-03"
+user-id = 64539
+user-login = "kennykerr"
+user-name = "Kenny Kerr"
+
+[[publisher.windows_i686_gnu]]
+version = "0.52.6"
+when = "2024-07-03"
+user-id = 64539
+user-login = "kennykerr"
+user-name = "Kenny Kerr"
+
+[[publisher.windows_i686_gnullvm]]
+version = "0.52.6"
+when = "2024-07-03"
+user-id = 64539
+user-login = "kennykerr"
+user-name = "Kenny Kerr"
+
+[[publisher.windows_i686_msvc]]
+version = "0.52.6"
+when = "2024-07-03"
+user-id = 64539
+user-login = "kennykerr"
+user-name = "Kenny Kerr"
+
+[[publisher.windows_x86_64_gnu]]
+version = "0.52.6"
+when = "2024-07-03"
+user-id = 64539
+user-login = "kennykerr"
+user-name = "Kenny Kerr"
+
+[[publisher.windows_x86_64_gnullvm]]
+version = "0.52.6"
+when = "2024-07-03"
+user-id = 64539
+user-login = "kennykerr"
+user-name = "Kenny Kerr"
+
+[[publisher.windows_x86_64_msvc]]
+version = "0.52.6"
+when = "2024-07-03"
+user-id = 64539
+user-login = "kennykerr"
+user-name = "Kenny Kerr"
+
+[[publisher.winnow]]
+version = "1.0.4"
+when = "2026-07-13"
+user-id = 6743
+user-login = "epage"
+user-name = "Ed Page"
+
 [[publisher.wit-bindgen]]
 version = "0.57.1"
 when = "2026-04-17"
 trusted-publisher = "github:bytecodealliance/wit-bindgen"
+
+[[publisher.zmij]]
+version = "1.0.23"
+when = "2026-07-13"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
 
 [[audits.ariel-os.audits.litrs]]
 who = "Antoine Lavandier <antoine.lavandier@inria.fr>"
@@ -173,11 +1086,6 @@ No ambient I/O. Uses some `unsafe`, but the uses look good and are guarded by
 relevant assertions, although could use some comments and some slight
 refactoring into helpers to dedupe unsafe blocks in my personal opinion.
 """
-
-[[audits.bytecode-alliance.audits.hashbrown]]
-who = "Chris Fallin <chris@cfallin.org>"
-criteria = "safe-to-deploy"
-delta = "0.14.5 -> 0.15.2"
 
 [[audits.bytecode-alliance.audits.heck]]
 who = "Alex Crichton <alex@alexcrichton.com>"
@@ -2024,42 +2932,6 @@ who = "Daira-Emma Hopwood <daira@jacaranda.org>"
 criteria = "safe-to-deploy"
 delta = "0.3.0 -> 0.3.1"
 aggregated-from = "https://raw.githubusercontent.com/zcash/zcash/master/qa/supply-chain/audits.toml"
-
-[[audits.zcash.audits.phf]]
-who = "Jack Grigg <jack@electriccoin.co>"
-criteria = "safe-to-deploy"
-delta = "0.11.3 -> 0.12.1"
-aggregated-from = "https://raw.githubusercontent.com/zcash/librustzcash/main/supply-chain/audits.toml"
-
-[[audits.zcash.audits.phf]]
-who = "Jack Grigg <jack@electriccoin.co>"
-criteria = "safe-to-deploy"
-delta = "0.12.1 -> 0.13.1"
-aggregated-from = "https://raw.githubusercontent.com/zcash/librustzcash/main/supply-chain/audits.toml"
-
-[[audits.zcash.audits.phf_generator]]
-who = "Jack Grigg <jack@electriccoin.co>"
-criteria = "safe-to-deploy"
-delta = "0.11.3 -> 0.12.1"
-aggregated-from = "https://raw.githubusercontent.com/zcash/librustzcash/main/supply-chain/audits.toml"
-
-[[audits.zcash.audits.phf_generator]]
-who = "Jack Grigg <jack@electriccoin.co>"
-criteria = "safe-to-deploy"
-delta = "0.12.1 -> 0.13.1"
-aggregated-from = "https://raw.githubusercontent.com/zcash/librustzcash/main/supply-chain/audits.toml"
-
-[[audits.zcash.audits.phf_shared]]
-who = "Jack Grigg <jack@electriccoin.co>"
-criteria = "safe-to-deploy"
-delta = "0.11.3 -> 0.12.1"
-aggregated-from = "https://raw.githubusercontent.com/zcash/librustzcash/main/supply-chain/audits.toml"
-
-[[audits.zcash.audits.phf_shared]]
-who = "Jack Grigg <jack@electriccoin.co>"
-criteria = "safe-to-deploy"
-delta = "0.12.1 -> 0.13.1"
-aggregated-from = "https://raw.githubusercontent.com/zcash/librustzcash/main/supply-chain/audits.toml"
 
 [[audits.zcash.audits.signature]]
 who = "Daira Emma Hopwood <daira@jacaranda.org>"
