@@ -1,0 +1,49 @@
+@import '@fontsource-variable/inter/index.css';
+@import '@fontsource-variable/plus-jakarta-sans/index.css';
+@import '@fontsource-variable/jetbrains-mono/index.css';
+
+:root {
+  color-scheme: light;
+  --font-sans: 'Inter Variable', system-ui, sans-serif;
+  --font-display: 'Plus Jakarta Sans Variable', var(--font-sans);
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;
+  --background: #faf9fc;
+  --surface: #ffffff;
+  --text: #292333;
+  --muted: #686171;
+  --accent: #7252aa;
+  --accent-strong: #5f4194;
+  --accent-text: #ffffff;
+  --soft: #f0eaf8;
+  --border: #e3dfea;
+  --shadow: 0 18px 50px -30px #55416c55;
+}
+/* The media fallback also makes Auto useful when JavaScript is disabled. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --background: #18141f;
+    --surface: #211c29;
+    --text: #f4effa;
+    --muted: #b1a9bd;
+    --accent: #bea5ef;
+    --accent-strong: #d3bff8;
+    --accent-text: #21172f;
+    --soft: #2b2436;
+    --border: #393142;
+    --shadow: 0 18px 50px -30px #00000088;
+  }
+}
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --background: #18141f;
+  --surface: #211c29;
+  --text: #f4effa;
+  --muted: #b1a9bd;
+  --accent: #bea5ef;
+  --accent-strong: #d3bff8;
+  --accent-text: #21172f;
+  --soft: #2b2436;
+  --border: #393142;
+  --shadow: 0 18px 50px -30px #00000088;
+}

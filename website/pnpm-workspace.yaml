@@ -1,0 +1,8 @@
+packages:
+  - '.'
+# Match the five-day dependency cooldown used by the MeshAtlas website.
+minimumReleaseAge: 7200
+blockExoticSubdeps: true
+allowBuilds:
+  esbuild: true
+  sharp: true

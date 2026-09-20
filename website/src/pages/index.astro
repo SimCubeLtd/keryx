@@ -1,0 +1,349 @@
+---
+const base = import.meta.env.BASE_URL;
+import ThemeProvider from '../components/ThemeProvider.astro';
+import ThemeSelect from '../components/ThemeSelect.astro';
+import '../styles/theme.css';
+import '../styles/landing.css';
+
+const description = 'Turn your agent’s HTML plans, proposals and reports into shareable links. Self-hosted publishing with version history and PDF exports.';
+const canonical = Astro.site ? new URL(base, Astro.site) : undefined;
+
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Keryx | Self-hosted publishing for agents</title>
+    <meta name="description" content={description} />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="icon" href={base + 'favicon.svg'} type="image/svg+xml" />
+    {canonical && <link rel="canonical" href={canonical} />}
+    <meta property="og:title" content="Keryx | Your agent's work. Ready to read." />
+    <meta property="og:description" content={description} />
+    <meta property="og:type" content="website" />
+    {canonical && <meta property="og:url" content={canonical} />}
+    <meta name="twitter:card" content="summary" />
+    <ThemeProvider />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="header wrap">
+      <a class="brand" href={base + ''} aria-label="Keryx home"><img src={base + 'favicon.svg'} alt="" width="34" height="34" /><span>Keryx</span></a>
+      <nav aria-label="Main navigation">
+        <a href="#workflow">How it works</a>
+        <a href={base + 'docs/'}>Documentation</a>
+        <a class="github-link" href="https://github.com/SimCubeLtd/keryx">GitHub ↗</a>
+        <ThemeSelect />
+      </nav>
+    </header>
+    <main id="main">
+      <section class="hero wrap" aria-labelledby="hero-title">
+        <p class="eyebrow">Self-hosted publishing for agents</p>
+        <h1 id="hero-title">Your agent's work.<br /><span>Ready to read.</span></h1>
+        <p class="lede">Your agent writes the plan. Keryx gives it a home,<br class="wide-only" /> a shareable link and a history you can follow.</p>
+        <div class="actions">
+          <a class="button primary" href={base + 'docs/quickstart/'}>Publish your first document <span aria-hidden="true">↗</span></a>
+          <a class="button" href="#workflow">See how it works <span aria-hidden="true">↓</span></a>
+        </div>
+        <p class="hero-note">One binary <span>·</span> HTML in, a URL out <span>·</span> PDF when you need it</p>
+        <div class="upload-line"><code>keryx upload ./plan.html</code><span aria-hidden="true">→</span><span>A link ready for review.</span></div>
+      </section>
+
+      <section class="section why-html" id="why-html">
+        <p class="eyebrow">
+          Keep your judgment in the loop
+        </p>
+        <h2>
+          Make the plan worth reading.
+        </h2>
+        <p class="why-lede">
+          Your agent can take on more work. You still need to understand its choices.
+        </p>
+        <p class="why-intro">
+          A long plan is easy to skim. Ask for a document that puts the options, risks and decisions where you can see them, then question it before the work begins.
+        </p>
+        <div class="annotated" aria-label="Illustrative HTML plan with explanatory margin notes">
+          <div class="plan-heading">
+            <div class="plan-meta">
+              <span>
+                RELEASE PLAN / VERSION 2
+              </span>
+              <span>
+                Illustrative document
+              </span>
+            </div>
+            <h3>
+              Launch with a smaller first release.
+            </h3>
+            <p>
+              Decide how much to ship, check the risk, then give the agent a clear next step.
+            </p>
+          </div>
+          <div class="margin intro-note">
+            <span class="annotation-label">
+              A document built for review
+            </span>
+            <p>
+              The layout makes the decision visible before you read every detail.
+            </p>
+          </div>
+          <div class="plan-part">
+            <div class="part-title">
+              <span>
+                01
+              </span>
+              <h3>
+                Compare the scope
+              </h3>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">
+                    Option
+                  </th>
+                  <th scope="col">
+                    What ships
+                  </th>
+                  <th scope="col">
+                    Trade-off
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr class="recommended">
+                  <th scope="row">
+                    Focused release
+                    <small>
+                      Proposed
+                    </small>
+                  </th>
+                  <td>
+                    Publishing + usage docs
+                  </td>
+                  <td>
+                    Earlier feedback; sharing guide follows.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    Full release
+                  </th>
+                  <td>
+                    Publishing + every guide
+                  </td>
+                  <td>
+                    More complete; delays the first release.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <aside class="margin">
+            <span class="annotation-label">
+              01 / Compare the options
+            </span>
+            <h3>
+              See the trade-off.
+            </h3>
+            <p>
+              Alternatives share the same columns. You can compare scope and cost without hunting through paragraphs.
+            </p>
+          </aside>
+          <div class="plan-part">
+            <div class="part-title">
+              <span>
+                02
+              </span>
+              <h3>
+                Check the risk
+              </h3>
+            </div>
+            <div class="risk">
+              <strong>
+                First-time setup is still untested.
+              </strong>
+              <p>
+                Before release, ask someone outside the project to install the binary and publish their first document using only the guide.
+              </p>
+            </div>
+            <p class="plan-subtext">
+              Release condition: a successful upload from a fresh setup.
+            </p>
+          </div>
+          <aside class="margin">
+            <span class="annotation-label">
+              02 / Spot the risk
+            </span>
+            <h3>
+              Notice what could fail.
+            </h3>
+            <p>
+              A clear callout keeps a consequential assumption from disappearing into the rest of the plan.
+            </p>
+          </aside>
+          <div class="plan-part plan-last">
+            <div class="part-title">
+              <span>
+                03
+              </span>
+              <h3>
+                Your decision
+              </h3>
+            </div>
+            <p class="decision">
+              Ship the focused release, or wait for the full set of guides?
+            </p>
+            <div class="decision-line">
+              <span>
+                Awaiting your direction
+              </span>
+              <span>
+                Then revise the plan →
+              </span>
+            </div>
+          </div>
+          <aside class="margin">
+            <span class="annotation-label">
+              03 / Make the decision
+            </span>
+            <h3>
+              Give the agent direction.
+            </h3>
+            <p>
+              The open question is explicit. Discuss it with your agent and have it publish the revision at the same link.
+            </p>
+          </aside>
+        </div>
+        <div class="why-bottom">
+          <h3>Make the work easier to question.</h3>
+          <p>
+            HTML gives a plan room for comparisons, diagrams and clear decisions. Keryx gives it a link you can return to. Read it, challenge it, and guide the next revision.
+          </p>
+          <a class="reading" href="https://claude.com/blog/using-claude-code-the-unreasonable-effectiveness-of-html" target="_blank" rel="noopener noreferrer">
+            Why HTML works for agent output · Anthropic ↗
+          </a>
+        </div>
+        <p class="annotation-caption">
+          Illustrative HTML document. Margin notes explain the design, not an in-app commenting feature.
+        </p>
+      </section>
+      <section class="section band" id="versions">
+        <div>
+          <p class="eyebrow">
+            The document stays yours
+          </p>
+          <h2>
+            One link.
+            <br />
+            A history you can follow.
+          </h2>
+          <p>
+            Keep improving the draft without losing what came before. Share a specific version when a decision needs a fixed reference.
+          </p>
+          <a href={base + 'docs/versions/'}>
+            Explore the publishing workflow ↗
+          </a>
+        </div>
+        <div class="versions">
+          <div class="version-row active">
+            <strong>
+              Version 3
+            </strong>
+            <small>
+              Ready for review
+            </small>
+            <span>
+              Latest
+            </span>
+          </div>
+          <div class="version-row">
+            <strong>
+              Version 2
+            </strong>
+            <small>
+              Revised scope
+            </small>
+          </div>
+          <div class="version-row">
+            <strong>
+              Version 1
+            </strong>
+            <small>
+              Initial proposal
+            </small>
+          </div>
+          <p class="meta">
+            Illustrative version history
+          </p>
+        </div>
+        <section class="compact-flow" id="workflow" aria-label="Publishing workflow">
+          <ol>
+            <li>
+              <b>
+                01
+              </b>
+              <div>
+                <h3>
+                  Write
+                </h3>
+                <p>
+                  Your agent creates the HTML.
+                </p>
+              </div>
+              <span class="flow-arrow" aria-hidden="true">
+                →
+              </span>
+            </li>
+            <li>
+              <b>
+                02
+              </b>
+              <div>
+                <h3>
+                  Publish
+                </h3>
+                <p>
+                  Keryx gives it a shareable link.
+                </p>
+              </div>
+              <span class="flow-arrow" aria-hidden="true">
+                →
+              </span>
+            </li>
+            <li>
+              <b>
+                03
+              </b>
+              <div>
+                <h3>
+                  Review &amp; revise
+                </h3>
+                <p>
+                  You guide the next version.
+                </p>
+              </div>
+            </li>
+          </ol>
+        </section>
+      </section>
+      <section class="section cta">
+        <div>
+          <p class="eyebrow">
+            Start with your next plan
+          </p>
+          <h2>
+            Ask for HTML.
+            <br />
+            Read it. Shape what comes next.
+          </h2>
+        </div>
+        <a class="button primary" href={base + 'docs/agents/'}>
+          Set up your agent ↗
+        </a>
+      </section>
+    </main>
+    <footer class="footer wrap"><div><a class="brand" href={base + ''}>Keryx</a><p>κῆρυξ / KEH-riks / Herald</p></div><p>A SimCube project · MIT licensed</p><nav aria-label="Footer navigation"><a href={base + 'docs/'}>Docs</a><a href="https://github.com/SimCubeLtd/keryx">GitHub</a></nav></footer>
+  </body>
+</html>

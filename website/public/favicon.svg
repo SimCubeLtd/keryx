@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     xmlns:vc="https://vectorctl.dev/ns/1"
+     xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+     version="1.1"
+     width="24mm"
+     height="24mm"
+     viewBox="0 0 24 24">
+  <metadata>
+    <vc:document xmlns:vc="https://vectorctl.dev/ns/1" version="0.1.0" schema="1.0"/>
+    <title>Keryx Dispatch</title>
+  </metadata>
+  <g id="artwork" inkscape:groupmode="layer" inkscape:label="Artwork">
+    <rect id="field" x="1" y="1" width="22" height="22" rx="5" ry="5" fill="#2563eb"/>
+    <rect id="page" x="5" y="4" width="11.5" height="16" rx="1.6" ry="1.6" fill="#ffffff"/>
+    <polygon id="fold-cut" points="12.5,4 16.5,4 16.5,8" fill="#2563eb"/>
+    <rect id="line-one" x="7.2" y="11" width="7.1" height="1.5" rx="0.75" ry="0.75" fill="#2563eb"/>
+    <rect id="line-two" x="7.2" y="14.5" width="5.1" height="1.5" rx="0.75" ry="0.75" fill="#93c5fd"/>
+    <polygon id="outbound" points="15.5,14.2 21,17 15.5,19.8" fill="#93c5fd"/>
+  </g>
+</svg>
