@@ -1,0 +1,11 @@
+---
+const base = import.meta.env.BASE_URL;
+---
+<a class="docs-brand" href={base + ''} aria-label="Keryx home">
+  <img src={base + 'favicon.svg'} width="30" height="30" alt="" />
+  <span>Keryx</span><span class="docs-label">/ docs</span>
+</a>
+<style>
+  .docs-brand { display: flex; gap: .6rem; align-items: center; text-decoration: none; color: var(--text); font-family: var(--font-display); font-weight: 750; font-size: 1.4rem; letter-spacing: -.04em; }
+  .docs-label { color: var(--muted); font: 400 .85rem var(--font-sans); letter-spacing: 0; }
+</style>

@@ -1,0 +1,35 @@
+---
+import { Icon } from '@astrojs/starlight/components';
+---
+<button
+  type="button"
+  class="theme-picker"
+  data-theme-toggle
+  aria-label="Colour mode: System. Switch to Light"
+  title="Colour mode: System. Switch to Light"
+>
+  <span data-mode="auto"><Icon name="laptop" size="1.2rem" /></span>
+  <span data-mode="light"><Icon name="sun" size="1.2rem" /></span>
+  <span data-mode="dark"><Icon name="moon" size="1.2rem" /></span>
+</button>
+<style>
+  .theme-picker {
+    display: inline-grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: .5rem;
+    cursor: pointer;
+  }
+  .theme-picker:hover { border-color: var(--accent); }
+  .theme-picker:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  .theme-picker span { display: none; }
+  :global(html:not([data-theme-mode])) [data-mode="auto"],
+  :global(html[data-theme-mode="auto"]) [data-mode="auto"],
+  :global(html[data-theme-mode="light"]) [data-mode="light"],
+  :global(html[data-theme-mode="dark"]) [data-mode="dark"] { display: inline-flex; }
+</style>
