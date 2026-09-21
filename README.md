@@ -6,6 +6,10 @@ Rust binary. An agent hands Keryx a static HTML document — a plan, proposal,
 brief, or report — and Keryx proclaims it at a URL that serves the exact
 uploaded bytes to every client: browsers, `curl`, and agent fetch tools alike.
 
+# Docs
+
+Documentation and information is available here: https://simcubeltd.github.io/keryx/
+
 ## Why "Keryx"?
 
 In the ancient Greek world the *kēryx* was the herald. Under the protection of
