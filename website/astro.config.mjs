@@ -21,7 +21,7 @@ export default defineConfig({
       sidebar: [
         { label: 'Keryx', link: '/' },
         { label: 'Start here', items: ['docs', 'docs/installation', 'docs/quickstart', 'docs/skills', 'docs/agents'] },
-        { label: 'Publish and manage', items: ['docs/versions', 'docs/pdf', 'docs/availability', 'docs/sharing'] },
+        { label: 'Publish and manage', items: ['docs/versions', 'docs/pdf', 'docs/availability', 'docs/tagging', 'docs/sharing'] },
         { label: 'Run Keryx', items: ['docs/configuration', 'docs/storage', 'docs/html-policy'] },
         { label: 'Reference', items: ['docs/cli'] },
       ],
