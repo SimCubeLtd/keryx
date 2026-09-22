@@ -19,6 +19,7 @@ The server, CLI and terminal UI ship in one Rust binary. SQLite stores metadata 
 - [Versions and links](./versions/): revise one draft and link to a specific version.
 - [PDF publishing](./pdf/): turn stored HTML into a paginated A4 document.
 - [Availability](./availability/): snooze a draft, disable access or bring it back.
+- [Dashboard tagging](./tagging/): organise drafts with shared tags and filter them in the web UI.
 - [Registry sharing](./sharing/): distribute versioned HTML through an OCI registry.
 
 ## Run your own server
