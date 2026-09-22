@@ -3160,7 +3160,7 @@ dependencies = [
 
 [[package]]
 name = "keryx"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3185,7 +3185,7 @@ dependencies = [
 
 [[package]]
 name = "keryx-client"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "dirs",
@@ -3201,7 +3201,7 @@ dependencies = [
 
 [[package]]
 name = "keryx-config"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "config",
@@ -3213,7 +3213,7 @@ dependencies = [
 
 [[package]]
 name = "keryx-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "chrono",
  "hex",
@@ -3225,7 +3225,7 @@ dependencies = [
 
 [[package]]
 name = "keryx-db"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3240,7 +3240,7 @@ dependencies = [
 
 [[package]]
 name = "keryx-policy"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "scraper",
  "serde",
@@ -3249,7 +3249,7 @@ dependencies = [
 
 [[package]]
 name = "keryx-render"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3257,13 +3257,14 @@ dependencies = [
  "fulgur",
  "keryx-core",
  "scraper",
+ "serde_json",
  "usvg",
  "woff2-patched",
 ]
 
 [[package]]
 name = "keryx-server"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3280,6 +3281,7 @@ dependencies = [
  "keryx-store",
  "rand 0.9.5",
  "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "tempfile",
@@ -3290,7 +3292,7 @@ dependencies = [
 
 [[package]]
 name = "keryx-share"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "docker_credential",
@@ -3305,7 +3307,7 @@ dependencies = [
 
 [[package]]
 name = "keryx-store"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "async-trait",

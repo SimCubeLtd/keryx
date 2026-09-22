@@ -29,6 +29,252 @@
   var selectedId = null;
   var view = "active";
 
+  // Tags are dashboard metadata. The modal owns its target and survives snapshots.
+  var catalogueNode = document.getElementById("tag-catalogue");
+  var catalogue = catalogueNode ? JSON.parse(catalogueNode.dataset.tags) : [];
+  var selectedTags = new Set();
+  var untagged = false;
+  var tagDialog = document.getElementById("tag-dialog");
+  var tagInput = document.getElementById("tag-input");
+  var tagModal = null;
+  var tagTimer = null;
+  var tagMenu = document.getElementById("tag-filter");
+  var removingTags = new Set();
+
+  function rowTags(row) { return JSON.parse(row.dataset.tags || "[]"); }
+  function canonicalTag(value) {
+    if (!/^[a-zA-Z0-9 -]*$/.test(value)) return null;
+    var name = value.trim().replace(/ +/g, " ").toLowerCase();
+    return name.length > 0 && name.length <= 32 ? name : null;
+  }
+  function tagButton(text, label, action) {
+    var button = document.createElement("button");
+    button.type = "button";
+    button.className = "tag-chip";
+    button.textContent = text;
+    button.setAttribute("aria-label", label);
+    button.addEventListener("click", action);
+    return button;
+  }
+  function clearTags() {
+    selectedTags.clear(); untagged = false; applyFilters(); syncUrl();
+    document.getElementById("tag-filter-summary").focus();
+  }
+  function chooseTag(id) {
+    untagged = false; selectedTags.add(id); applyFilters(); syncUrl();
+  }
+  function matchesTags(row) {
+    var tags = rowTags(row);
+    if (untagged) return tags.length === 0;
+    return !selectedTags.size || tags.some(function (tag) { return selectedTags.has(tag.id); });
+  }
+  function renderTagFilters(query) {
+    if (!managementEnabled) return;
+    var counts = new Map();
+    var empty = 0;
+    rows.filter(function (row) { return matches(row, query); }).forEach(function (row) {
+      var tags = rowTags(row);
+      if (!tags.length) empty += 1;
+      tags.forEach(function (tag) { counts.set(tag.id, (counts.get(tag.id) || 0) + 1); });
+    });
+    var options = document.getElementById("tag-filter-options");
+    var focusedId = document.activeElement && document.activeElement.dataset.tagChoice;
+    options.replaceChildren();
+    var filterQuery = document.getElementById("tag-filter-search").value.trim().toLowerCase();
+    catalogue.filter(function (tag) { return tag.name.includes(filterQuery); }).forEach(function (tag) {
+      var label = document.createElement("label");
+      var box = document.createElement("input");
+      box.type = "checkbox"; box.checked = selectedTags.has(tag.id); box.dataset.tagChoice = tag.id;
+      box.addEventListener("change", function () {
+        untagged = false;
+        if (box.checked) selectedTags.add(tag.id); else selectedTags.delete(tag.id);
+        applyFilters(); syncUrl();
+      });
+      label.append(box, document.createTextNode(" " + tag.name + " (" + (counts.get(tag.id) || 0) + ")"));
+      options.append(label);
+      if (focusedId === tag.id) box.focus();
+    });
+    document.getElementById("tag-untagged").checked = untagged;
+    document.getElementById("untagged-count").textContent = "(" + empty + ")";
+    document.getElementById("tag-filter-summary").textContent = untagged ? "Tags: untagged" : (selectedTags.size ? "Tags: " + selectedTags.size + " selected" : "Tags: all");
+    var chips = document.getElementById("tag-selections");
+    chips.replaceChildren();
+    selectedTags.forEach(function (id) {
+      var tag = catalogue.find(function (tag) { return tag.id === id; });
+      var name = tag ? tag.name : "Missing tag " + id;
+      chips.append(tagButton(name + " ×", "Clear filter " + name, function () {
+        selectedTags.delete(id); applyFilters(); syncUrl();
+        document.getElementById("tag-filter-summary").focus();
+      }));
+    });
+    if (untagged) chips.append(tagButton("Untagged ×", "Clear untagged filter", clearTags));
+    if (selectedTags.size || untagged) chips.append(tagButton("Clear all", "Clear all tag filters", clearTags));
+    document.getElementById("clear-empty-tags").hidden = emptyResults.hidden || (!selectedTags.size && !untagged);
+    document.getElementById("tag-sort-help").hidden = sort.value !== "tag";
+  }
+  function renderDetailTags(row) {
+    var container = document.getElementById("detail-tags");
+    if (!container) return;
+    container.replaceChildren();
+    rowTags(row).forEach(function (tag) {
+      var button = tagButton(tag.name + " ×", "Remove tag " + tag.name, function () {
+        var key = row.dataset.draftId + "/" + tag.id;
+        if (removingTags.has(key)) return;
+        removingTags.add(key); button.disabled = true;
+        tagRequest(row.dataset.draftId, tag.id).then(function () {
+          refreshDashboard();
+        }).catch(function (error) { showToast(error.message, true); }).finally(function () {
+          removingTags.delete(key);
+          var current = findRow(selectedId);
+          if (current) renderDetailTags(current);
+        });
+      });
+      button.disabled = removingTags.has(row.dataset.draftId + "/" + tag.id);
+      container.append(button);
+    });
+    var add = tagButton("+ Add tag", "Add tag", function () { openTagDialog(row); });
+    add.id = "add-tag"; add.className = "button";
+    container.append(add);
+  }
+  function tagRequest(draftId, tagId, name) {
+    return fetch("/api/dashboard/drafts/" + encodeURIComponent(draftId) + "/tags" + (tagId ? "/" + encodeURIComponent(tagId) : ""), {
+      method: tagId ? "DELETE" : "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: tagId ? undefined : JSON.stringify({ name: name })
+    }).then(function (response) {
+      return response.json().then(function (body) {
+        if (!response.ok) throw new Error(body.error || "Tags could not be saved.");
+        return body;
+      });
+    });
+  }
+  function cancelTagTimer() { clearTimeout(tagTimer); tagTimer = null; }
+  function closeTagDialog() {
+    cancelTagTimer(); tagModal = null; tagDialog.close();
+    var trigger = document.getElementById("add-tag");
+    var detail = document.getElementById("draft-detail");
+    if (!trigger || detail.classList.contains("empty")) trigger = search;
+    trigger.focus();
+  }
+  function openTagDialog(row) {
+    cancelTagTimer();
+    tagModal = { draftId: row.dataset.draftId, pending: false, composing: false, waiting: false, choices: [], active: -1 };
+    tagInput.value = ""; tagInput.disabled = false;
+    document.getElementById("tag-target").textContent = "To " + row.dataset.title;
+    document.getElementById("tag-error").textContent = "";
+    reconcileTagSuggestions(); tagDialog.showModal(); tagInput.focus();
+  }
+  function reconcileTagSuggestions() {
+    if (!tagModal) return;
+    var row = findRow(tagModal.draftId);
+    if (!row) { closeTagDialog(); showToast("The draft is no longer available for tagging.", true); return; }
+    if (tagModal.pending || tagModal.waiting || tagModal.composing) return;
+    var previous = tagModal.choices[tagModal.active];
+    var assigned = new Set(rowTags(row).map(function (tag) { return tag.id; }));
+    var query = tagInput.value.trim().replace(/ +/g, " ").toLowerCase();
+    function rank(tag) { return tag.name === query ? 0 : tag.name.startsWith(query) ? 1 : 2; }
+    var choices = catalogue.filter(function (tag) { return tag.name.includes(query); }).sort(function (a, b) {
+      return rank(a) - rank(b) || a.name.localeCompare(b.name);
+    }).slice(0, 8).map(function (tag) { return { id: tag.id, name: tag.name, added: assigned.has(tag.id) }; });
+    var canonical = canonicalTag(tagInput.value);
+    if (canonical && !catalogue.some(function (tag) { return tag.name === canonical; })) {
+      choices = choices.slice(0, 7);
+      choices.push({ id: "create:" + canonical, name: canonical, create: true });
+    }
+    tagModal.choices = choices;
+    tagModal.active = previous ? choices.findIndex(function (choice) { return choice.id === previous.id && !choice.added; }) : -1;
+    if (tagModal.active < 0) tagModal.active = choices.findIndex(function (choice) { return !choice.added; });
+    renderTagSuggestions();
+  }
+  function renderTagSuggestions() {
+    var list = document.getElementById("tag-suggestions");
+    list.replaceChildren(); tagInput.removeAttribute("aria-activedescendant");
+    if (!tagModal) return;
+    var blocked = tagModal.waiting || tagModal.composing || tagModal.pending;
+    tagInput.setAttribute("aria-expanded", String(!blocked && tagModal.choices.length > 0));
+    document.getElementById("tag-status").textContent = tagModal.pending ? "Saving…" : blocked ? "Updating suggestions…" : tagModal.choices.length + " options";
+    if (blocked) return;
+    tagModal.choices.forEach(function (choice, index) {
+      var option = document.createElement("div");
+      option.id = "tag-option-" + index; option.setAttribute("role", "option");
+      option.setAttribute("aria-selected", String(index === tagModal.active));
+      option.setAttribute("aria-disabled", String(Boolean(choice.added)));
+      option.textContent = choice.create ? '+ Create "' + choice.name + '"' : choice.name + (choice.added ? " · Added" : "");
+      option.addEventListener("mousedown", function (event) { event.preventDefault(); });
+      option.addEventListener("click", function () { submitTag(index); });
+      list.append(option);
+      if (index === tagModal.active) tagInput.setAttribute("aria-activedescendant", option.id);
+    });
+  }
+  function submitTag(index) {
+    var session = tagModal;
+    if (!session || session.pending || session.waiting || session.composing) return;
+    var choice = session.choices[index];
+    if (!choice || choice.added) return;
+    session.pending = true; tagInput.disabled = true;
+    document.getElementById("tag-error").textContent = ""; renderTagSuggestions();
+    tagRequest(session.draftId, null, choice.name).then(function () {
+      if (tagModal === session) closeTagDialog();
+      refreshDashboard();
+    }).catch(function (error) {
+      if (tagModal !== session) return;
+      session.pending = false; tagInput.disabled = false;
+      document.getElementById("tag-error").textContent = error.message;
+      reconcileTagSuggestions(); tagInput.focus();
+    });
+  }
+  function debounceTags() {
+    if (!tagModal) return;
+    cancelTagTimer(); tagModal.waiting = true; tagModal.active = -1; renderTagSuggestions();
+    if (tagModal.composing) return;
+    tagTimer = setTimeout(function () {
+      tagTimer = null;
+      if (!tagModal) return;
+      tagModal.waiting = false; reconcileTagSuggestions();
+    }, 150);
+  }
+  if (managementEnabled) {
+    tagInput.addEventListener("input", debounceTags);
+    tagInput.addEventListener("compositionstart", function () { tagModal.composing = true; debounceTags(); });
+    tagInput.addEventListener("compositionend", function () { tagModal.composing = false; debounceTags(); });
+    tagInput.addEventListener("keydown", function (event) {
+      if (event.isComposing || !tagModal || tagModal.composing) return;
+      if (event.key === "Enter") { event.preventDefault(); submitTag(tagModal.active); }
+      if (!["ArrowDown", "ArrowUp"].includes(event.key) || tagModal.waiting || tagModal.pending) return;
+      event.preventDefault();
+      var choices = tagModal.choices;
+      for (var step = 1; step <= choices.length; step += 1) {
+        var index = (tagModal.active + (event.key === "ArrowDown" ? step : -step) + choices.length) % choices.length;
+        if (!choices[index].added) { tagModal.active = index; break; }
+      }
+      renderTagSuggestions();
+    });
+    tagDialog.addEventListener("keydown", function (event) {
+      if (event.key !== "Tab") return;
+      var cancel = document.getElementById("tag-cancel");
+      if (tagInput.disabled || (event.shiftKey && document.activeElement === tagInput)) {
+        event.preventDefault(); cancel.focus();
+      } else if (!event.shiftKey && document.activeElement === cancel) {
+        event.preventDefault(); tagInput.focus();
+      }
+    });
+    tagDialog.addEventListener("cancel", function (event) { event.preventDefault(); closeTagDialog(); });
+    document.getElementById("tag-cancel").addEventListener("click", closeTagDialog);
+    document.getElementById("tag-filter-search").addEventListener("input", function () { renderTagFilters(search.value.trim().toLowerCase()); });
+    document.getElementById("tag-untagged").addEventListener("change", function (event) {
+      untagged = event.target.checked; selectedTags.clear(); applyFilters(); syncUrl();
+    });
+    document.querySelectorAll("[data-clear-tags]").forEach(function (button) { button.addEventListener("click", clearTags); });
+    function closeTagFilter() { tagMenu.open = false; document.getElementById("tag-filter-summary").focus(); }
+    document.getElementById("tag-filter-done").addEventListener("click", closeTagFilter);
+    tagMenu.addEventListener("keydown", function (event) { if (event.key === "Escape") { event.preventDefault(); closeTagFilter(); } });
+    document.addEventListener("click", function (event) { if (!tagMenu.contains(event.target)) tagMenu.open = false; });
+    document.addEventListener("click", function (event) {
+      var chip = event.target.closest("[data-filter-tag]");
+      if (chip) { event.stopPropagation(); chooseTag(chip.dataset.filterTag); }
+    });
+  }
+
   function relativeTime(value) {
     var timestamp = Date.parse(value);
     if (!Number.isFinite(timestamp)) return value || "Not recorded";
@@ -165,6 +411,7 @@
       button.hidden = !visibleActions.includes(button.dataset.availabilityAction);
     });
 
+    renderDetailTags(row);
     if (keepHistory && !changedSelection) return;
     if (managementEnabled) {
       loadVersions(row.dataset.draftId);
@@ -273,7 +520,7 @@
     var counts = updateCounts();
     var visible = [];
     rows.forEach(function (row) {
-      var show = matches(row, query);
+      var show = matches(row, query) && matchesTags(row);
       row.hidden = !show;
       if (show) visible.push(row);
     });
@@ -293,15 +540,21 @@
         populateSummary(visible[0]);
       } else {
         detail.classList.add("empty");
+        selectedId = null;
       }
     } else {
       detail.classList.remove("empty");
     }
+    renderTagFilters(query);
   }
 
   function applySort() {
     var direction = sort.value;
     rows.sort(function (left, right) {
+      if (direction === "tag") {
+        var a = rowTags(left)[0]; var b = rowTags(right)[0];
+        return (!a - !b) || (a && b ? a.name.localeCompare(b.name) : 0) || left.dataset.title.localeCompare(right.dataset.title) || left.dataset.draftId.localeCompare(right.dataset.draftId);
+      }
       if (direction === "title") return left.dataset.title.localeCompare(right.dataset.title);
       if (direction === "versions") return Number(right.dataset.versionCount) - Number(left.dataset.versionCount);
       var delta = Date.parse(right.dataset.updated) - Date.parse(left.dataset.updated);
@@ -324,6 +577,11 @@
     var params = new URLSearchParams();
     if (selectedId) params.set("draft", selectedId);
     params.set("view", view);
+    if (search.value) params.set("search", search.value);
+    if (repoFilter && repoFilter.value) params.set("repo", repoFilter.value);
+    if (sort.value !== "updated") params.set("sort", sort.value);
+    selectedTags.forEach(function (id) { params.append("tag", id); });
+    if (untagged) params.set("untagged", "1");
     history.replaceState(null, "", "/?" + params.toString());
   }
 
@@ -340,6 +598,7 @@
       syncUrl();
     });
     row.addEventListener("keydown", function (event) {
+      if (event.target !== row) return;
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
         populateSummary(row);
@@ -365,6 +624,7 @@
     all.value = "";
     all.textContent = "All repositories";
     repoFilter.append(all);
+    if (selected && !repositories.includes(selected)) repositories.push(selected);
     repositories.forEach(function (repository) {
       var option = document.createElement("option");
       option.value = repository;
@@ -380,11 +640,11 @@
       syncUrl();
     });
   });
-  search.addEventListener("input", applyFilters);
-  if (repoFilter) repoFilter.addEventListener("change", applyFilters);
-  sort.addEventListener("change", applySort);
+  search.addEventListener("input", function () { applyFilters(); syncUrl(); });
+  if (repoFilter) repoFilter.addEventListener("change", function () { applyFilters(); syncUrl(); });
+  sort.addEventListener("change", function () { applySort(); syncUrl(); });
   document.addEventListener("keydown", function (event) {
-    if (event.key === "/" && document.activeElement !== search) {
+    if (event.key === "/" && !event.target.closest("input, textarea, select, dialog")) {
       event.preventDefault();
       search.focus();
     }
@@ -768,7 +1028,6 @@
       return;
     }
     refreshInFlight = true;
-    var previousSelection = selectedId;
     var query = selectedId ? "?selected=" + encodeURIComponent(selectedId) : "";
     fetch("/api/dashboard/snapshot" + query, { headers: { Accept: "application/json" } })
       .then(function (response) {
@@ -779,18 +1038,27 @@
         if (typeof snapshot.rows !== "string" || typeof snapshot.detail !== "string") {
           throw new Error("Dashboard snapshot was malformed");
         }
+        if (managementEnabled) catalogue = snapshot.tags || [];
+        var focused = document.activeElement;
+        var detailHadFocus = document.getElementById("draft-detail").contains(focused);
+        var focusId = focused && focused.id;
         tbody.innerHTML = snapshot.rows;
         var detail = document.getElementById("draft-detail");
         detail.outerHTML = snapshot.detail;
         rows = Array.from(tbody.querySelectorAll(".draft-row"));
         rows.forEach(bindRow);
         syncRepositoryFilter();
+        reconcileTagSuggestions();
         bindDetailActions();
         applySort();
 
         var selected = findRow(selectedId);
-        if (selected && selectedId === previousSelection && !selected.hidden) {
+        if (selected && !selected.hidden) {
           populateSummary(selected);
+        }
+        if (detailHadFocus && !tagModal) {
+          var focusTarget = focusId && document.getElementById(focusId);
+          (selected && !selected.hidden && focusTarget ? focusTarget : search).focus();
         }
         syncUrl();
         scheduleWake();
@@ -817,6 +1085,17 @@
   // lives in another tab wins over the view parameter.
 
   var params = new URLSearchParams(location.search);
+  search.value = params.get("search") || "";
+  if (repoFilter && params.get("repo")) {
+    var repositoryOption = document.createElement("option");
+    repositoryOption.value = params.get("repo"); repositoryOption.textContent = params.get("repo");
+    repoFilter.append(repositoryOption); repoFilter.value = params.get("repo");
+  }
+  if (["updated", "oldest", "title", "versions", "tag"].includes(params.get("sort"))) sort.value = params.get("sort");
+  if (managementEnabled) {
+    untagged = params.get("untagged") === "1";
+    if (!untagged) selectedTags = new Set(params.getAll("tag"));
+  }
   var linkedRow = params.get("draft") ? findRow(params.get("draft")) : null;
   var linkedView = params.get("view") || "active";
   if (linkedRow) linkedView = linkedRow.dataset.availability;
@@ -826,5 +1105,6 @@
     populateSummary(linkedRow);
     linkedRow.scrollIntoView({ block: "nearest" });
   }
+  syncUrl();
   scheduleWake();
 })();

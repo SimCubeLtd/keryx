@@ -177,6 +177,18 @@ async fn assert_parity(name: &str, legacy: &Path, dir: &Path) {
         &format!("{name}.rows"),
         &serde_json::to_value(all_rows(&adopted).await).unwrap(),
     );
+    // New organisation tables are additive; historical golden rows stay unchanged.
+    for table in ["tags", "draft_tags"] {
+        assert_eq!(
+            common::integer(&adopted, &format!("SELECT COUNT(*) FROM {table}")).await,
+            0
+        );
+    }
+    let foreign_keys = rows(&adopted, "PRAGMA foreign_key_list(draft_tags)").await;
+    assert_eq!(foreign_keys.len(), 2);
+    for key in foreign_keys {
+        assert_eq!(key.try_get_by_index::<String>(6).unwrap(), "CASCADE");
+    }
     adopted.close().await.unwrap();
 
     // ...and the store answers exactly what the old query layer answered.

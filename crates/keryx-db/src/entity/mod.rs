@@ -6,10 +6,12 @@
 //! columns are `bool`: INTEGER on SQLite, BOOLEAN on Postgres.
 
 pub mod draft;
+pub mod draft_tag;
 pub mod draft_version;
 pub mod notification_delivery;
 pub mod notification_event;
 pub mod push_subscription;
+pub mod tag;
 
 #[cfg(test)]
 mod tests {
@@ -61,6 +63,8 @@ mod tests {
             };
         }
         check!(draft::Entity);
+        check!(tag::Entity);
+        check!(draft_tag::Entity);
         check!(draft_version::Entity);
         check!(push_subscription::Entity);
         check!(notification_event::Entity);

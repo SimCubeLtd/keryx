@@ -24,7 +24,7 @@ async fn a_fresh_database_is_created_by_the_migrator_not_adopted() {
     assert_eq!(adoption, Adoption::Fresh);
     assert_eq!(
         integer(&db, "SELECT COUNT(*) FROM seaql_migrations").await,
-        1
+        2
     );
     assert_eq!(
         backups_in(dir.path()),
@@ -50,7 +50,7 @@ async fn adoption_is_idempotent_and_writes_exactly_one_baseline_row() {
         assert_eq!(second, Adoption::Managed, "user_version {user_version}");
         assert_eq!(
             strings(&db, "SELECT version FROM seaql_migrations").await,
-            ["m0001_baseline"]
+            ["m0001_baseline", "m0002_tags"]
         );
         // The pragma is left alone, so an older Keryx still understands the file.
         assert_eq!(

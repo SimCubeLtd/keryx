@@ -321,6 +321,19 @@ pub struct UploadMetadata {
     pub cli_version: Option<String>,
 }
 
+/// Shared dashboard organisation metadata, independent of document summaries.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Tag {
+    pub id: String,
+    pub name: String,
+}
+
+/// A dashboard row. Tags are never part of the CLI/TUI summary contract.
+pub struct DashboardDraft {
+    pub summary: DraftSummary,
+    pub tags: Vec<Tag>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
