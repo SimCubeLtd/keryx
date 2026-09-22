@@ -15,6 +15,7 @@ mod types;
 
 pub use store::{DatabaseConfig, DraftStore, SeaOrmStore};
 pub use types::{
-    normalize_wake_time, AvailabilityError, BlobRecord, NewUpload, PendingDelivery, ServedVersion,
-    UploadError, UploadOutcome, DEFAULT_DISABLE_REASON,
+    canonical_tag_name, normalize_wake_time, AvailabilityError, BlobRecord, DashboardTags,
+    NewUpload, PendingDelivery, ServedVersion, TagError, UploadError, UploadOutcome,
+    DEFAULT_DISABLE_REASON,
 };

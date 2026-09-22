@@ -3257,6 +3257,7 @@ dependencies = [
  "fulgur",
  "keryx-core",
  "scraper",
+ "serde_json",
  "usvg",
  "woff2-patched",
 ]
@@ -3280,6 +3281,7 @@ dependencies = [
  "keryx-store",
  "rand 0.9.5",
  "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "tempfile",

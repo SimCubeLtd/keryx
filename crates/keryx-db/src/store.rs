@@ -20,21 +20,30 @@ use keryx_core::ids::{new_draft_id, new_internal_id};
 use keryx_core::now;
 use keryx_core::types::{
     AvailabilityUpdate, DraftSummary, NotificationEvent, NotificationKind, PushSubscriptionInput,
-    PushSubscriptionSummary, VersionInfo,
+    PushSubscriptionSummary, Tag, VersionInfo,
 };
 
 use crate::adopt::{self, Adoption};
 use crate::entity::{
-    draft, draft_version, notification_delivery, notification_event, push_subscription,
+    draft, draft_tag, draft_version, notification_delivery, notification_event, push_subscription,
+    tag,
 };
 use crate::types::{
-    normalize_wake_time, AvailabilityError, BlobRecord, NewUpload, PendingDelivery, ServedVersion,
-    UploadError, UploadOutcome, DEFAULT_DISABLE_REASON,
+    canonical_tag_name, normalize_wake_time, AvailabilityError, BlobRecord, DashboardTags,
+    NewUpload, PendingDelivery, ServedVersion, TagError, UploadError, UploadOutcome,
+    DEFAULT_DISABLE_REASON,
 };
 
 /// Draft and version metadata, availability, and the notification outbox.
 #[async_trait]
 pub trait DraftStore: Send + Sync {
+    /// Load the catalogue and all live draft assignments without version joins.
+    async fn dashboard_tags(&self) -> Result<DashboardTags>;
+    /// Create-or-find and attach atomically. Writes only organisation metadata.
+    async fn attach_tag(&self, draft_id: &str, name: &str) -> Result<Vec<Tag>, TagError>;
+    /// Remove one assignment; repeated removal is a successful no-op.
+    async fn detach_tag(&self, draft_id: &str, tag_id: &str) -> Result<Vec<Tag>, TagError>;
+
     /// A trivial query, for `/healthz`.
     async fn ping(&self) -> Result<()>;
 
@@ -250,6 +259,22 @@ impl SeaOrmStore {
             .and_then(|row| row.try_get_by_index::<Option<T>>(0).expect("peek column"))
     }
 
+    async fn lock_tag_draft(
+        &self,
+        tx: &DatabaseTransaction,
+        draft_id: &str,
+    ) -> Result<(), TagError> {
+        let mut query =
+            draft::Entity::find_by_id(draft_id).filter(draft::Column::DeletedAt.is_null());
+        if tx.get_database_backend() == DbBackend::Postgres {
+            query = query.lock_exclusive();
+        }
+        if query.one(tx).await?.is_none() {
+            return Err(TagError::DraftNotFound);
+        }
+        Ok(())
+    }
+
     /// Every write transaction begins immediate. A deferred read-then-write
     /// transaction fails with SQLITE_BUSY regardless of the busy timeout, and
     /// record_upload is exactly that shape. Ignored on Postgres.
@@ -453,6 +478,108 @@ struct DeliveryRow {
 
 #[async_trait]
 impl DraftStore for SeaOrmStore {
+    async fn dashboard_tags(&self) -> Result<DashboardTags> {
+        let catalogue: Vec<Tag> = tag::Entity::find()
+            .order_by_asc(tag::Column::Name)
+            .all(&self.db)
+            .await?
+            .into_iter()
+            .map(|tag| Tag {
+                id: tag.id,
+                name: tag.name,
+            })
+            .collect();
+        let assignments = draft_tag::Entity::find()
+            .filter(
+                draft_tag::Column::DraftId.in_subquery(
+                    Query::select()
+                        .column(draft::Column::Id)
+                        .from(draft::Entity)
+                        .and_where(draft::Column::DeletedAt.is_null())
+                        .to_owned(),
+                ),
+            )
+            .all(&self.db)
+            .await?;
+        let by_id: std::collections::HashMap<_, _> =
+            catalogue.iter().map(|tag| (tag.id.as_str(), tag)).collect();
+        let mut grouped = std::collections::HashMap::<String, Vec<Tag>>::new();
+        for assignment in assignments {
+            if let Some(tag) = by_id.get(assignment.tag_id.as_str()) {
+                grouped
+                    .entry(assignment.draft_id)
+                    .or_default()
+                    .push((*tag).clone());
+            }
+        }
+        for tags in grouped.values_mut() {
+            tags.sort_by(|a, b| a.name.cmp(&b.name));
+        }
+        Ok(DashboardTags {
+            catalogue,
+            assignments: grouped,
+        })
+    }
+
+    async fn attach_tag(&self, draft_id: &str, name: &str) -> Result<Vec<Tag>, TagError> {
+        let name = canonical_tag_name(name)?;
+        let tx = self.begin_write().await?;
+        self.lock_tag_draft(&tx, draft_id).await?;
+        let current = assigned_tags(&tx, draft_id).await?;
+        if current.iter().any(|tag| tag.name == name) {
+            tx.commit().await?;
+            return Ok(current);
+        }
+        if current.len() >= 20 {
+            return Err(TagError::Invalid(
+                "A draft can have at most 20 tags.".into(),
+            ));
+        }
+        tag::Entity::insert(tag::ActiveModel {
+            id: Set(new_internal_id()),
+            name: Set(name.clone()),
+        })
+        .on_conflict(
+            OnConflict::column(tag::Column::Name)
+                .do_nothing()
+                .to_owned(),
+        )
+        .try_insert()
+        .exec(&tx)
+        .await?;
+        let tag = tag::Entity::find()
+            .filter(tag::Column::Name.eq(name))
+            .one(&tx)
+            .await?
+            .ok_or_else(|| sea_orm::DbErr::RecordNotFound("Tag insert returned no tag".into()))?;
+        draft_tag::Entity::insert(draft_tag::ActiveModel {
+            draft_id: Set(draft_id.into()),
+            tag_id: Set(tag.id),
+        })
+        .on_conflict(
+            OnConflict::columns([draft_tag::Column::DraftId, draft_tag::Column::TagId])
+                .do_nothing()
+                .to_owned(),
+        )
+        .try_insert()
+        .exec(&tx)
+        .await?;
+        let tags = assigned_tags(&tx, draft_id).await?;
+        tx.commit().await?;
+        Ok(tags)
+    }
+
+    async fn detach_tag(&self, draft_id: &str, tag_id: &str) -> Result<Vec<Tag>, TagError> {
+        let tx = self.begin_write().await?;
+        self.lock_tag_draft(&tx, draft_id).await?;
+        draft_tag::Entity::delete_by_id((draft_id.to_owned(), tag_id.to_owned()))
+            .exec(&tx)
+            .await?;
+        let tags = assigned_tags(&tx, draft_id).await?;
+        tx.commit().await?;
+        Ok(tags)
+    }
+
     async fn ping(&self) -> Result<()> {
         let backend: DbBackend = self.db.get_database_backend();
         self.db
@@ -1052,6 +1179,28 @@ impl DraftStore for SeaOrmStore {
             .await?;
         Ok(nearest.flatten())
     }
+}
+
+async fn assigned_tags<C: ConnectionTrait>(db: &C, draft_id: &str) -> Result<Vec<Tag>, DbErr> {
+    Ok(tag::Entity::find()
+        .filter(
+            tag::Column::Id.in_subquery(
+                Query::select()
+                    .column(draft_tag::Column::TagId)
+                    .from(draft_tag::Entity)
+                    .and_where(draft_tag::Column::DraftId.eq(draft_id))
+                    .to_owned(),
+            ),
+        )
+        .order_by_asc(tag::Column::Name)
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|tag| Tag {
+            id: tag.id,
+            name: tag.name,
+        })
+        .collect())
 }
 
 #[cfg(test)]

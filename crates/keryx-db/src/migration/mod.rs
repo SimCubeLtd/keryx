@@ -1,6 +1,7 @@
 //! Schema migrations, tracked by SeaORM in `seaql_migrations`.
 
 mod m0001_baseline;
+mod m0002_tags;
 
 use sea_orm_migration::prelude::*;
 
@@ -15,7 +16,10 @@ pub struct Migrator;
 #[async_trait::async_trait]
 impl MigratorTrait for Migrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![Box::new(m0001_baseline::Migration)]
+        vec![
+            Box::new(m0001_baseline::Migration),
+            Box::new(m0002_tags::Migration),
+        ]
     }
 }
 
@@ -45,17 +49,19 @@ mod tests {
         assert_eq!(
             names("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").await,
             [
+                "draft_tags",
                 "draft_versions",
                 "drafts",
                 "notification_deliveries",
                 "notification_events",
                 "push_subscriptions",
                 "seaql_migrations",
+                "tags",
             ]
         );
         assert_eq!(
             names("SELECT version FROM seaql_migrations").await,
-            [BASELINE_NAME]
+            [BASELINE_NAME, "m0002_tags"]
         );
     }
 }

@@ -751,3 +751,258 @@ async fn two_migrators_started_together_against_postgres_both_succeed() {
     }
     assert_eq!(created, 1, "exactly one pod creates the schema");
 }
+
+// Compare complete records, including timestamps, blob pointers and the outbox.
+async fn document_records(
+    store: &SeaOrmStore,
+) -> (
+    Vec<draft::Model>,
+    Vec<draft_version::Model>,
+    Vec<notification_event::Model>,
+    Vec<notification_delivery::Model>,
+    Vec<push_subscription::Model>,
+) {
+    let db = store.connection();
+    (
+        draft::Entity::find()
+            .order_by_asc(draft::Column::Id)
+            .all(db)
+            .await
+            .unwrap(),
+        draft_version::Entity::find()
+            .order_by_asc(draft_version::Column::Id)
+            .all(db)
+            .await
+            .unwrap(),
+        notification_event::Entity::find().all(db).await.unwrap(),
+        notification_delivery::Entity::find().all(db).await.unwrap(),
+        push_subscription::Entity::find().all(db).await.unwrap(),
+    )
+}
+
+#[tokio::test]
+async fn tags_only_write_organisation_metadata_and_survive_document_changes() {
+    let store = SeaOrmStore::open_test().await;
+    store
+        .upsert_push_subscription(&subscription("https://push.test/tags", None))
+        .await
+        .unwrap();
+    let first = record(
+        &store,
+        "<title>Tagged</title>exact original bytes",
+        None,
+        &UploadMetadata::default(),
+    )
+    .await
+    .unwrap();
+    let id = &first.draft_id;
+    assert!(store.dashboard_tags().await.unwrap().assignments.is_empty());
+    let before = document_records(&store).await;
+    let tags = store
+        .attach_tag(id, "  Release   Planning  ")
+        .await
+        .unwrap();
+    assert_eq!(tags[0].name, "release planning");
+    assert!(!before.2.is_empty());
+    assert!(!before.3.is_empty());
+    assert!(!before.4.is_empty());
+    assert_eq!(document_records(&store).await, before);
+    assert_eq!(
+        store.attach_tag(id, "RELEASE PLANNING").await.unwrap(),
+        tags
+    );
+    assert_eq!(document_records(&store).await, before);
+    let other = record(&store, "other", None, &UploadMetadata::default())
+        .await
+        .unwrap();
+    let before = document_records(&store).await;
+    assert_eq!(
+        store
+            .attach_tag(&other.draft_id, "release planning")
+            .await
+            .unwrap(),
+        tags
+    );
+    assert_eq!(document_records(&store).await, before);
+    assert!(store.detach_tag(id, &tags[0].id).await.unwrap().is_empty());
+    assert_eq!(document_records(&store).await, before);
+    assert!(store.detach_tag(id, &tags[0].id).await.unwrap().is_empty());
+    assert_eq!(document_records(&store).await, before);
+    assert_eq!(store.dashboard_tags().await.unwrap().catalogue, tags);
+    store.attach_tag(id, "release planning").await.unwrap();
+    record(
+        &store,
+        "updated bytes",
+        Some(id.clone()),
+        &UploadMetadata::default(),
+    )
+    .await
+    .unwrap();
+    store
+        .set_availability(id, &AvailabilityUpdate::Disabled { reason: None })
+        .await
+        .unwrap();
+    assert_eq!(store.dashboard_tags().await.unwrap().assignments[id], tags);
+    store
+        .set_availability(
+            id,
+            &AvailabilityUpdate::Snoozed {
+                until: "2099-01-01T00:00:00Z".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(store.dashboard_tags().await.unwrap().assignments[id], tags);
+    store.soft_delete_draft(id).await.unwrap();
+    assert!(!store
+        .dashboard_tags()
+        .await
+        .unwrap()
+        .assignments
+        .contains_key(id));
+    assert!(matches!(
+        store.attach_tag(id, "nope").await,
+        Err(TagError::DraftNotFound)
+    ));
+    assert!(matches!(
+        store.detach_tag(id, &tags[0].id).await,
+        Err(TagError::DraftNotFound)
+    ));
+    store.purge_deleted_drafts().await.unwrap();
+    assert!(draft_tag::Entity::find()
+        .filter(draft_tag::Column::DraftId.eq(id))
+        .all(store.connection())
+        .await
+        .unwrap()
+        .is_empty());
+    store.purge_draft(&other.draft_id).await.unwrap();
+    assert!(draft_tag::Entity::find()
+        .all(store.connection())
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(store.dashboard_tags().await.unwrap().catalogue, tags);
+}
+
+#[tokio::test]
+async fn tag_limits_and_concurrent_assignments_are_atomic() {
+    let store = SeaOrmStore::open_test().await;
+    let first = record(&store, "one", None, &UploadMetadata::default())
+        .await
+        .unwrap();
+    let second = record(&store, "two", None, &UploadMetadata::default())
+        .await
+        .unwrap();
+    let before = document_records(&store).await;
+    let (a, b, c) = tokio::join!(
+        store.attach_tag(&first.draft_id, "Shared"),
+        store.attach_tag(&first.draft_id, " shared "),
+        store.attach_tag(&second.draft_id, "SHARED"),
+    );
+    assert_eq!(a.as_ref().unwrap(), b.as_ref().unwrap());
+    assert_eq!(a.unwrap(), c.unwrap());
+    for invalid in [
+        "",
+        "   ",
+        "a\tb",
+        "x\n",
+        "é",
+        "<tag>",
+        "a/b",
+        "abcdefghijklmnopqrstuvwxyz1234567",
+    ] {
+        assert!(
+            matches!(
+                store.attach_tag(&first.draft_id, invalid).await,
+                Err(TagError::Invalid(_))
+            ),
+            "{invalid:?}"
+        );
+    }
+    store
+        .attach_tag(&first.draft_id, "abcdefghijklmnopqrstuvwxyz123456")
+        .await
+        .unwrap();
+    for n in 0..17 {
+        store
+            .attach_tag(&first.draft_id, &format!("tag-{n}"))
+            .await
+            .unwrap();
+    }
+    let (a, b) = tokio::join!(
+        store.attach_tag(&first.draft_id, "last-a"),
+        store.attach_tag(&first.draft_id, "last-b")
+    );
+    assert_eq!(usize::from(a.is_ok()) + usize::from(b.is_ok()), 1);
+    assert!(matches!(a.err().or(b.err()), Some(TagError::Invalid(_))));
+    assert_eq!(
+        store
+            .attach_tag(&first.draft_id, "shared")
+            .await
+            .unwrap()
+            .len(),
+        20
+    );
+    assert_eq!(store.dashboard_tags().await.unwrap().catalogue.len(), 20);
+    assert_eq!(document_records(&store).await, before);
+    assert!(matches!(
+        store.attach_tag("missing", "valid").await,
+        Err(TagError::DraftNotFound)
+    ));
+}
+
+#[tokio::test]
+async fn populated_baseline_upgrade_preserves_records_and_tags_persist_on_reopen() {
+    use sea_orm_migration::MigratorTrait;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("upgrade.sqlite");
+    let db = crate::connect::connect_sqlite(&path, None).await.unwrap();
+    crate::migration::Migrator::up(&db, Some(1)).await.unwrap();
+    let store = SeaOrmStore { db };
+    let uploaded = record(
+        &store,
+        "immutable content",
+        None,
+        &UploadMetadata::default(),
+    )
+    .await
+    .unwrap();
+    let before = document_records(&store).await;
+    crate::migration::Migrator::up(store.connection(), None)
+        .await
+        .unwrap();
+    assert_eq!(document_records(&store).await, before);
+    assert!(store.dashboard_tags().await.unwrap().catalogue.is_empty());
+    let tags = store
+        .attach_tag(&uploaded.draft_id, "persisted")
+        .await
+        .unwrap();
+    assert_eq!(document_records(&store).await, before);
+    store.db.close().await.unwrap();
+    let (store, _) = SeaOrmStore::open_sqlite(&path, false).await.unwrap();
+    assert_eq!(
+        store.dashboard_tags().await.unwrap().assignments[&uploaded.draft_id],
+        tags
+    );
+    assert_eq!(document_records(&store).await, before);
+}
+
+#[tokio::test]
+async fn tags_upgrade_a_populated_baseline_on_either_backend() {
+    use sea_orm_migration::MigratorTrait;
+    let store = SeaOrmStore::open_test().await;
+    // Only this test's fresh database/schema is rolled back to the baseline.
+    crate::migration::Migrator::down(store.connection(), Some(1))
+        .await
+        .unwrap();
+    record(&store, "baseline", None, &UploadMetadata::default())
+        .await
+        .unwrap();
+    let before = document_records(&store).await;
+    crate::migration::Migrator::up(store.connection(), None)
+        .await
+        .unwrap();
+    assert_eq!(document_records(&store).await, before);
+    assert!(store.dashboard_tags().await.unwrap().catalogue.is_empty());
+    assert!(store.dashboard_tags().await.unwrap().assignments.is_empty());
+}

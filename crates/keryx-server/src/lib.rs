@@ -26,11 +26,12 @@ use crate::notifications::{PushHub, VapidIdentity};
 use crate::realtime::DashboardUpdates;
 use keryx_core::ids::new_internal_id;
 use keryx_core::types::{
-    Availability, AvailabilityUpdate, DraftDetail, DraftSummary, PushSubscriptionInput,
-    UploadMetadata, UploadResponse,
+    Availability, AvailabilityUpdate, DashboardDraft, DraftDetail, DraftSummary,
+    PushSubscriptionInput, UploadMetadata, UploadResponse,
 };
 use keryx_db::{
-    AvailabilityError, DatabaseConfig, DraftStore, NewUpload, SeaOrmStore, UploadError,
+    AvailabilityError, DashboardTags, DatabaseConfig, DraftStore, NewUpload, SeaOrmStore, TagError,
+    UploadError,
 };
 use keryx_policy::{validate_html, PolicyOptions, DEFAULT_MAX_HTML_BYTES};
 use keryx_render::pdf::{render_version_pdf, PdfIdentity};
@@ -400,6 +401,11 @@ fn build_router(state: SharedState, max_html_bytes: usize) -> Router {
         .route("/", get(dashboard))
         .route("/api/dashboard/events", get(dashboard_events))
         .route("/api/dashboard/snapshot", get(dashboard_snapshot))
+        .route("/api/dashboard/drafts/{draft_id}/tags", post(attach_tag))
+        .route(
+            "/api/dashboard/drafts/{draft_id}/tags/{tag_id}",
+            delete(detach_tag),
+        )
         .route("/healthz", get(healthz))
         .route("/api/me", get(me))
         .route("/api/uploads", post(upload))
@@ -530,8 +536,9 @@ async fn dashboard(State(state): State<SharedState>, headers: HeaderMap) -> Resp
     let base = base_url(&state, &headers);
     let drafts = dashboard_drafts(&state, &base).await;
     match drafts {
-        Ok(drafts) => Html(render_dashboard(
+        Ok((drafts, tags)) => Html(render_dashboard(
             &drafts,
+            &tags.catalogue,
             &base,
             state.api_key_hash.is_none(),
         ))
@@ -540,12 +547,33 @@ async fn dashboard(State(state): State<SharedState>, headers: HeaderMap) -> Resp
     }
 }
 
-async fn dashboard_drafts(state: &AppState, base: &str) -> Result<Vec<DraftSummary>> {
+async fn dashboard_drafts(
+    state: &AppState,
+    base: &str,
+) -> Result<(Vec<DashboardDraft>, DashboardTags)> {
     let mut drafts = state.db.list_drafts().await?;
     for draft in &mut drafts {
         fill_urls(draft, base);
     }
-    Ok(drafts)
+    let mut tags = if state.api_key_hash.is_none() {
+        state.db.dashboard_tags().await?
+    } else {
+        DashboardTags::default()
+    };
+    let rows = drafts
+        .into_iter()
+        .map(|summary| {
+            let assigned = tags
+                .assignments
+                .remove(&summary.draft_id)
+                .unwrap_or_default();
+            DashboardDraft {
+                summary,
+                tags: assigned,
+            }
+        })
+        .collect();
+    Ok((rows, tags))
 }
 
 #[derive(Deserialize, Default)]
@@ -561,32 +589,95 @@ async fn dashboard_snapshot(
     headers: HeaderMap,
 ) -> Response {
     let base = base_url(&state, &headers);
-    let drafts = match dashboard_drafts(&state, &base).await {
+    let (drafts, tags) = match dashboard_drafts(&state, &base).await {
         Ok(drafts) => drafts,
         Err(error) => return internal_error(error),
     };
     let selected = query
         .selected
         .as_deref()
-        .and_then(|selected| drafts.iter().find(|draft| draft.draft_id == selected))
+        .and_then(|selected| {
+            drafts
+                .iter()
+                .find(|draft| draft.summary.draft_id == selected)
+        })
         .or_else(|| {
             drafts
                 .iter()
-                .find(|draft| draft.availability() == Availability::Active)
+                .find(|draft| draft.summary.availability() == Availability::Active)
         })
         .or_else(|| drafts.first());
     let management_enabled = state.api_key_hash.is_none();
 
-    Json(json!({
+    let mut snapshot = json!({
         "ok": true,
         "rows": render_dashboard_rows(
             &drafts,
-            selected.map(|draft| draft.draft_id.as_str()),
+            selected.map(|draft| draft.summary.draft_id.as_str()),
             management_enabled,
         ),
         "detail": render_dashboard_detail(selected, management_enabled),
-    }))
-    .into_response()
+    });
+    if management_enabled {
+        snapshot["tags"] = json!(tags.catalogue);
+    }
+    Json(snapshot).into_response()
+}
+
+#[derive(Deserialize)]
+struct AttachTag {
+    name: String,
+}
+
+async fn attach_tag(
+    State(state): State<SharedState>,
+    Path(draft_id): Path<String>,
+    headers: HeaderMap,
+    input: Result<Json<AttachTag>, JsonRejection>,
+) -> Response {
+    if !authorized(&state, &headers) {
+        return unauthorized();
+    }
+    let Ok(Json(input)) = input else {
+        return json_error(StatusCode::BAD_REQUEST, "A tag name is required.");
+    };
+    let name = match keryx_db::canonical_tag_name(&input.name) {
+        Ok(name) => name,
+        Err(error) => return json_error(StatusCode::BAD_REQUEST, &error.to_string()),
+    };
+    let result = state.db.attach_tag(&draft_id, &name).await;
+    tag_response(&state, result, Some(&name))
+}
+
+async fn detach_tag(
+    State(state): State<SharedState>,
+    Path((draft_id, tag_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Response {
+    if !authorized(&state, &headers) {
+        return unauthorized();
+    }
+    tag_response(&state, state.db.detach_tag(&draft_id, &tag_id).await, None)
+}
+
+fn tag_response(
+    state: &AppState,
+    result: std::result::Result<Vec<keryx_core::types::Tag>, TagError>,
+    attached_name: Option<&str>,
+) -> Response {
+    match result {
+        Ok(tags) => {
+            state.dashboard_updates.changed();
+            let mut body = json!({ "ok": true, "tags": tags });
+            if let Some(name) = attached_name {
+                body["tag"] = json!(tags.iter().find(|tag| tag.name == name));
+            }
+            Json(body).into_response()
+        }
+        Err(TagError::DraftNotFound) => json_error(StatusCode::NOT_FOUND, "Draft not found."),
+        Err(TagError::Invalid(message)) => json_error(StatusCode::BAD_REQUEST, &message),
+        Err(TagError::Other(error)) => internal_error(error.into()),
+    }
 }
 
 /// Stream coalesced invalidations. Each connection immediately receives the
@@ -1278,6 +1369,142 @@ mod tests {
             dashboard_updates: DashboardUpdates::new(),
         });
         (state, db)
+    }
+
+    #[tokio::test]
+    async fn tag_routes_authorize_redact_and_leave_content_unchanged() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let (state, db) = test_state_and_db(keryx_store::memory_backend()).await;
+        let content = "<!doctype html><title>Original</title><p>Exact bytes</p>";
+        let upload = record(&state, content, None, &UploadMetadata::default()).await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let app = build_router(state.clone(), DEFAULT_MAX_HTML_BYTES);
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let client = reqwest::Client::new();
+        let url = format!("{base}/api/dashboard/drafts/{}/tags", upload.draft_id);
+        let mut updates = state.dashboard_updates.subscribe();
+        assert_eq!(
+            client
+                .post(&url)
+                .json(&json!({"name": "private-label"}))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert!(!updates.has_changed().unwrap());
+        let response = client
+            .post(&url)
+            .bearer_auth("secret")
+            .json(&json!({"name": " Private-Label "}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(body["tags"][0]["name"], "private-label");
+        let tag_id = body["tags"][0]["id"].as_str().unwrap();
+        assert!(updates.has_changed().unwrap());
+        updates.borrow_and_update();
+        for route in ["/", "/api/dashboard/snapshot"] {
+            let response = client
+                .get(format!("{base}{route}"))
+                .send()
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap();
+            assert!(!response.contains("private-label"));
+            assert!(!response.contains(tag_id));
+        }
+        let snapshot: serde_json::Value = client
+            .get(format!("{base}/api/dashboard/snapshot"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(snapshot.get("tags").is_none());
+        assert!(!snapshot["rows"].as_str().unwrap().contains("data-tags="));
+        assert!(!snapshot["detail"]
+            .as_str()
+            .unwrap()
+            .contains("id=\"add-tag\""));
+        assert_eq!(
+            client
+                .post(&url)
+                .bearer_auth("secret")
+                .json(&json!({"name": "<bad>"}))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+        assert!(!updates.has_changed().unwrap());
+        assert_eq!(
+            client
+                .post(&url)
+                .bearer_auth("secret")
+                .json(&json!({}))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+        let deletion = format!("{url}/{tag_id}");
+        assert_eq!(
+            client.delete(&deletion).send().await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            client
+                .delete(&deletion)
+                .bearer_auth("secret")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            client
+                .delete(&deletion)
+                .bearer_auth("secret")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            client
+                .post(format!("{base}/api/dashboard/drafts/missing/tags"))
+                .bearer_auth("secret")
+                .json(&json!({"name": "valid"}))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        let served = db
+            .find_public_version(&upload.draft_id, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            state.store.get(&served.object_key).await.unwrap().unwrap(),
+            content
+        );
+        server.abort();
     }
 
     #[test]

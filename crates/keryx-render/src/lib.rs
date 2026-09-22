@@ -7,7 +7,7 @@ pub mod pdf;
 
 use std::collections::BTreeSet;
 
-use keryx_core::types::{Availability, DraftSummary};
+use keryx_core::types::{Availability, DashboardDraft, DraftSummary, Tag};
 
 const DASHBOARD_CSS: &str = include_str!("../assets/dashboard.css");
 const DASHBOARD_JS: &str = include_str!("../assets/dashboard.js");
@@ -32,7 +32,13 @@ fn display_or(value: Option<&str>, fallback: &str) -> String {
     escape_html(value.unwrap_or(fallback))
 }
 
-fn render_row(draft: &DraftSummary, selected: bool, management_enabled: bool) -> String {
+fn render_row(row: &DashboardDraft, selected: bool, management_enabled: bool) -> String {
+    let draft = &row.summary;
+    let tags = if management_enabled {
+        row.tags.as_slice()
+    } else {
+        &[]
+    };
     let availability = draft.availability();
     let repository = management_enabled.then(|| repository(draft)).flatten();
     let repository_label = if management_enabled {
@@ -85,8 +91,8 @@ fn render_row(draft: &DraftSummary, selected: bool, management_enabled: bool) ->
     };
 
     format!(
-        r#"<tr class="draft-row{selected_class}" tabindex="0" role="option" aria-selected="{selected}"{hidden} data-draft-id="{id}" data-title="{title}" data-description="{description}" data-repository="{repository}" data-repo-host="{repo_host}" data-branch="{branch}" data-commit-sha="{commit_sha}" data-commit-subject="{commit_subject}" data-updated="{updated}" data-latest-version="{version}" data-version-count="{version_count}" data-disabled="{disabled}" data-snoozed-until="{snoozed_until}" data-availability="{availability}" data-public-url="{public_url}" data-search="{search}">
-  <td><div class="draft-title"><a href="{public_url}" target="_blank" rel="noopener noreferrer">{title}</a></div><div class="draft-description">{description_display}</div></td>
+        r#"<tr class="draft-row{selected_class}" tabindex="0" role="option" aria-selected="{selected}"{hidden} data-draft-id="{id}" data-title="{title}" data-description="{description}" data-repository="{repository}" data-repo-host="{repo_host}" data-branch="{branch}" data-commit-sha="{commit_sha}" data-commit-subject="{commit_subject}" data-updated="{updated}" data-latest-version="{version}" data-version-count="{version_count}" data-disabled="{disabled}" data-snoozed-until="{snoozed_until}" data-availability="{availability}" data-public-url="{public_url}" data-search="{search}"{tag_data}>
+  <td><div class="draft-title"><a href="{public_url}" target="_blank" rel="noopener noreferrer">{title}</a></div><div class="draft-description">{description_display}</div>{tag_chips}</td>
   <td><div class="source{missing_class}">{repository}</div><div class="branch">{branch}</div></td>
   <td><div class="updated" title="{updated}">{updated}</div><div class="version">v{version} · {version_count} {version_word}</div></td>
   <td class="row-action">
@@ -147,16 +153,33 @@ fn render_row(draft: &DraftSummary, selected: bool, management_enabled: bool) ->
         availability = availability.as_str(),
         public_url = escape_html(&draft.public_url),
         raw_url = escape_html(&draft.raw_url),
-        search = escape_html(&search),
+        search = escape_html(&format!(
+            "{} {}",
+            search,
+            tags.iter()
+                .map(|t| t.name.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        )),
+        tag_data = if management_enabled {
+            format!(
+                " data-tags=\"{}\"",
+                escape_html(&serde_json::to_string(tags).expect("serializing tags"))
+            )
+        } else {
+            String::new()
+        },
+        tag_chips = render_tag_chips(tags, false),
         missing_class = if repository.is_none() { " missing" } else { "" },
         protected_actions = protected_actions,
     )
 }
 
-pub fn render_dashboard_detail(draft: Option<&DraftSummary>, management_enabled: bool) -> String {
-    let Some(draft) = draft else {
+pub fn render_dashboard_detail(row: Option<&DashboardDraft>, management_enabled: bool) -> String {
+    let Some(row) = row else {
         return r#"<aside class="detail empty" id="draft-detail"><div><h2>No drafts yet</h2><p>Publish one with <code>keryx upload ./plan.html</code>.</p></div></aside>"#.to_string();
     };
+    let draft = &row.summary;
     let availability = draft.availability();
     let repository = if management_enabled {
         repository(draft).unwrap_or_else(|| "Provenance not recorded".into())
@@ -211,6 +234,7 @@ pub fn render_dashboard_detail(draft: Option<&DraftSummary>, management_enabled:
   <div class="detail-actions">
     {detail_actions}
   </div>
+  {tag_editor}
   <div class="meta-grid">
     <div class="meta-cell"><div class="meta-key">Origin</div><div class="meta-value mono" id="detail-origin">{repo_host}</div></div>
     <div class="meta-cell"><div class="meta-key">Repository</div><div class="meta-value" id="detail-repository">{repository}</div></div>
@@ -229,6 +253,14 @@ pub fn render_dashboard_detail(draft: Option<&DraftSummary>, management_enabled:
         title = escape_html(&draft.title),
         description = display_or(draft.description.as_deref(), "No description supplied."),
         detail_actions = detail_actions,
+        tag_editor = if management_enabled {
+            format!(
+                r#"<section class="detail-tags" aria-label="Tags"><h3>Tags</h3><div id="detail-tags" class="tag-chips">{}<button class="button" id="add-tag" type="button">+ Add tag</button></div></section>"#,
+                render_tag_chips(&row.tags, true)
+            )
+        } else {
+            String::new()
+        },
         id = escape_html(&draft.draft_id),
         repo_host = if management_enabled {
             display_or(draft.repo_host.as_deref(), "Not recorded")
@@ -249,6 +281,35 @@ pub fn render_dashboard_detail(draft: Option<&DraftSummary>, management_enabled:
     )
 }
 
+fn render_tag_chips(tags: &[Tag], removable: bool) -> String {
+    if tags.is_empty() {
+        return String::new();
+    }
+    let limit = if removable { tags.len() } else { 2 };
+    let mut html = String::from("<span class=\"tag-chips\">");
+    for tag in tags.iter().take(limit) {
+        let action = if removable {
+            "remove-tag"
+        } else {
+            "filter-tag"
+        };
+        let label = if removable {
+            format!("Remove tag {}", tag.name)
+        } else {
+            format!("Filter by {}", tag.name)
+        };
+        html.push_str(&format!(r#"<button class="tag-chip" type="button" data-{action}="{}" aria-label="{}">{}{}</button>"#, escape_html(&tag.id), escape_html(&label), escape_html(&tag.name), if removable { " ×" } else { "" }));
+    }
+    if tags.len() > limit {
+        html.push_str(&format!(
+            "<span class=\"tag-more\">+{}</span>",
+            tags.len() - limit
+        ));
+    }
+    html.push_str("</span>");
+    html
+}
+
 fn status_label(availability: Availability) -> &'static str {
     match availability {
         Availability::Active => "Active",
@@ -258,7 +319,7 @@ fn status_label(availability: Availability) -> &'static str {
 }
 
 pub fn render_dashboard_rows(
-    drafts: &[DraftSummary],
+    drafts: &[DashboardDraft],
     selected_id: Option<&str>,
     management_enabled: bool,
 ) -> String {
@@ -267,7 +328,7 @@ pub fn render_dashboard_rows(
         .map(|draft| {
             render_row(
                 draft,
-                Some(draft.draft_id.as_str()) == selected_id,
+                Some(draft.summary.draft_id.as_str()) == selected_id,
                 management_enabled,
             )
         })
@@ -275,20 +336,21 @@ pub fn render_dashboard_rows(
 }
 
 pub fn render_dashboard(
-    drafts: &[DraftSummary],
+    drafts: &[DashboardDraft],
+    catalogue: &[Tag],
     _base_url: &str,
     management_enabled: bool,
 ) -> String {
     // The dashboard opens on Active, so the first active draft is selected.
     let first_active = drafts
         .iter()
-        .find(|draft| draft.availability() == Availability::Active);
-    let selected_id = first_active.map(|draft| draft.draft_id.as_str());
+        .find(|draft| draft.summary.availability() == Availability::Active);
+    let selected_id = first_active.map(|draft| draft.summary.draft_id.as_str());
     let rows = render_dashboard_rows(drafts, selected_id, management_enabled);
     let repositories = if management_enabled {
         drafts
             .iter()
-            .filter_map(repository)
+            .filter_map(|draft| repository(&draft.summary))
             .collect::<BTreeSet<_>>()
             .into_iter()
             .map(|repository| {
@@ -304,7 +366,7 @@ pub fn render_dashboard(
     let count_of = |state: Availability| {
         drafts
             .iter()
-            .filter(|draft| draft.availability() == state)
+            .filter(|draft| draft.summary.availability() == state)
             .count()
     };
     let active_count = count_of(Availability::Active);
@@ -387,8 +449,10 @@ pub fn render_dashboard(
             <button class="tab off" type="button" role="tab" data-view="disabled" aria-selected="false">Disabled <span class="count" data-count="disabled">{disabled_count}</span></button>
           </div>
           {repo_filter}
-          <label class="sort">Sort<select id="draft-sort" aria-label="Sort drafts"><option value="updated">Recently updated</option><option value="oldest">Oldest updated</option><option value="title">Title</option><option value="versions">Most versions</option></select></label>
+          {tag_filter}
+          <label class="sort">Sort<select id="draft-sort" aria-label="Sort drafts"><option value="updated">Recently updated</option><option value="oldest">Oldest updated</option><option value="title">Title</option><option value="versions">Most versions</option>{tag_sort}</select></label>
         </div>
+        {tag_selections}
       </div>
       <div class="split">
         <div class="master">
@@ -399,6 +463,7 @@ pub fn render_dashboard(
       </div>
     </section>
   </main>
+  {tag_modal}
   <dialog id="prune-dialog">
     <div class="dialog-body">
       <div class="dialog-mark">!</div>
@@ -429,6 +494,29 @@ pub fn render_dashboard(
   <script>{js}</script>
 </body>
 </html>"#,
+        tag_filter = if management_enabled {
+            r#"<details id="tag-filter" class="tag-filter"><summary id="tag-filter-summary">Tags: all</summary><div class="tag-filter-menu"><label for="tag-filter-search">Find tags</label><input id="tag-filter-search" type="search"><div id="tag-filter-options"></div><label><input id="tag-untagged" type="checkbox"> Untagged only <span id="untagged-count"></span></label><p>Match any selected tag</p><button class="button" type="button" data-clear-tags>Clear all</button> <button class="button" id="tag-filter-done" type="button">Done</button></div></details>"#
+        } else {
+            ""
+        },
+        tag_sort = if management_enabled {
+            r#"<option value="tag">Tag A–Z</option>"#
+        } else {
+            ""
+        },
+        tag_selections = if management_enabled {
+            r#"<div id="tag-selections" class="tag-chips"></div><p id="tag-sort-help" hidden>Sorts by first alphabetical tag, then title. Untagged drafts come last.</p><button class="button" id="clear-empty-tags" data-clear-tags hidden>Clear tag filter</button>"#
+        } else {
+            ""
+        },
+        tag_modal = if management_enabled {
+            format!(
+                r#"<div id="tag-catalogue" hidden data-tags="{}"></div><dialog id="tag-dialog" aria-labelledby="tag-dialog-title"><div class="dialog-body"><h2 id="tag-dialog-title">Add tag</h2><p id="tag-target"></p><label for="tag-input">Tag name</label><input id="tag-input" role="combobox" aria-autocomplete="list" aria-controls="tag-suggestions" aria-expanded="false" autocomplete="off" autofocus><div id="tag-suggestions" role="listbox" aria-label="Tags"></div><p id="tag-status" role="status" aria-live="polite"></p><p id="tag-error" role="alert"></p><p class="tag-help">↑ ↓ to navigate · Enter to select · Esc to close</p><div class="dialog-actions"><button class="button" id="tag-cancel" type="button">Cancel</button></div></div></dialog>"#,
+                escape_html(&serde_json::to_string(catalogue).expect("serializing catalogue"))
+            )
+        } else {
+            String::new()
+        },
         css = DASHBOARD_CSS,
         js = DASHBOARD_JS,
         theme_color = "#2563eb",
@@ -479,8 +567,36 @@ mod tests {
     }
 
     #[test]
+    fn dashboard_escapes_tags_and_redacts_all_tag_data_when_protected() {
+        let tag = Tag {
+            id: "tag-unique-secret".into(),
+            name: "<img src=x onerror=alert(1)>\"".into(),
+        };
+        let rows = [DashboardDraft {
+            summary: draft(),
+            tags: vec![tag.clone()],
+        }];
+        let html = render_dashboard(&rows, std::slice::from_ref(&tag), "", true);
+        assert!(!html.contains("<img src=x"));
+        assert!(html.contains("&lt;img src=x"));
+        let protected = render_dashboard(&rows, &[tag], "", false);
+        assert!(!protected.contains("tag-unique-secret"));
+        assert!(!protected.contains("onerror=alert(1)"));
+        assert!(!protected.contains("data-tags="));
+        assert!(!protected.contains("id=\"tag-dialog\""));
+    }
+
+    #[test]
     fn dashboard_renders_the_selected_workspace_and_management_actions() {
-        let html = render_dashboard(&[draft()], "https://keryx.test", true);
+        let html = render_dashboard(
+            &[DashboardDraft {
+                summary: draft(),
+                tags: vec![],
+            }],
+            &[],
+            "https://keryx.test",
+            true,
+        );
 
         assert!(html.contains("data-draft-id=\"abc123def456\""));
         assert!(html.contains("feat/dashboard-ui"));
@@ -519,7 +635,18 @@ mod tests {
             disabled: true,
             ..draft()
         };
-        let html = render_dashboard(&[snoozed, disabled, draft()], "https://keryx.test", true);
+        let html = render_dashboard(
+            &[snoozed, disabled, draft()]
+                .into_iter()
+                .map(|summary| DashboardDraft {
+                    summary,
+                    tags: vec![],
+                })
+                .collect::<Vec<_>>(),
+            &[],
+            "https://keryx.test",
+            true,
+        );
 
         assert!(html.contains("data-view=\"active\" aria-selected=\"true\""));
         assert!(html.contains("data-view=\"snoozed\" aria-selected=\"false\""));
@@ -547,7 +674,15 @@ mod tests {
 
     #[test]
     fn protected_dashboard_redacts_provenance_and_omits_authenticated_actions() {
-        let html = render_dashboard(&[draft()], "https://keryx.test", false);
+        let html = render_dashboard(
+            &[DashboardDraft {
+                summary: draft(),
+                tags: vec![],
+            }],
+            &[],
+            "https://keryx.test",
+            false,
+        );
 
         assert!(html.contains("Public view · management via authenticated CLI"));
         assert!(html.contains("Use authenticated CLI"));

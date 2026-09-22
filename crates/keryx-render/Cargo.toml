@@ -14,5 +14,6 @@ chrono.workspace = true
 fulgur.workspace = true
 keryx-core.workspace = true
 scraper.workspace = true
+serde_json.workspace = true
 usvg.workspace = true
 woff2-patched.workspace = true

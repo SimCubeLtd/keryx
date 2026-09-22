@@ -122,3 +122,55 @@ pub struct PendingDelivery {
     pub auth: String,
     pub attempts: i64,
 }
+
+/// Catalogue and assignments loaded in a batch for dashboard rendering.
+#[derive(Default)]
+pub struct DashboardTags {
+    pub catalogue: Vec<keryx_core::types::Tag>,
+    pub assignments: std::collections::HashMap<String, Vec<keryx_core::types::Tag>>,
+}
+
+#[derive(Debug)]
+pub enum TagError {
+    DraftNotFound,
+    Invalid(String),
+    Other(sea_orm::DbErr),
+}
+impl std::fmt::Display for TagError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DraftNotFound => write!(f, "Draft not found."),
+            Self::Invalid(message) => write!(f, "{message}"),
+            Self::Other(error) => write!(f, "{error}"),
+        }
+    }
+}
+impl std::error::Error for TagError {}
+impl From<sea_orm::DbErr> for TagError {
+    fn from(error: sea_orm::DbErr) -> Self {
+        Self::Other(error)
+    }
+}
+
+/// Canonical names use only ASCII letters, digits, spaces and hyphens.
+pub fn canonical_tag_name(value: &str) -> Result<String, TagError> {
+    if !value
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b' ' || b == b'-')
+    {
+        return Err(TagError::Invalid(
+            "Use letters, digits, spaces and hyphens only.".into(),
+        ));
+    }
+    let name = value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase();
+    if name.is_empty() || name.len() > 32 {
+        return Err(TagError::Invalid(
+            "Tag names must contain 1 to 32 characters.".into(),
+        ));
+    }
+    Ok(name)
+}
