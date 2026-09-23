@@ -495,7 +495,7 @@ pub fn render_dashboard(
 </body>
 </html>"#,
         tag_filter = if management_enabled {
-            r#"<details id="tag-filter" class="tag-filter"><summary id="tag-filter-summary">Tags: all</summary><div class="tag-filter-menu"><label for="tag-filter-search">Find tags</label><input id="tag-filter-search" type="search"><div id="tag-filter-options"></div><label><input id="tag-untagged" type="checkbox"> Untagged only <span id="untagged-count"></span></label><p>Match any selected tag</p><button class="button" type="button" data-clear-tags>Clear all</button> <button class="button" id="tag-filter-done" type="button">Done</button></div></details>"#
+            r#"<details id="tag-filter" class="tag-filter"><summary id="tag-filter-summary">Tags: all</summary><div class="tag-filter-menu"><label for="tag-filter-search">Find tags</label><input id="tag-filter-search" type="search"><div id="tag-filter-options"></div><label><input id="tag-untagged" type="checkbox"> Untagged only <span id="untagged-count"></span></label><p>Match all selected tags</p><button class="button" type="button" data-clear-tags>Clear all</button> <button class="button" id="tag-filter-done" type="button">Done</button></div></details>"#
         } else {
             ""
         },
