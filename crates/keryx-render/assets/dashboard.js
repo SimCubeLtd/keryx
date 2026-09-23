@@ -66,7 +66,9 @@
   function matchesTags(row) {
     var tags = rowTags(row);
     if (untagged) return tags.length === 0;
-    return !selectedTags.size || tags.some(function (tag) { return selectedTags.has(tag.id); });
+    return Array.from(selectedTags).every(function (id) {
+      return tags.some(function (tag) { return tag.id === id; });
+    });
   }
   function renderTagFilters(query) {
     if (!managementEnabled) return;

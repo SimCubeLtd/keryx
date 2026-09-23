@@ -40,20 +40,34 @@ test.beforeEach(async ({ request }) => {
   for (const draft of body.drafts) await request.delete(`/api/drafts/${draft.draftId}?purge=true`);
 });
 
-test('ANY filters combine with repository, search and availability; URL and snapshots retain state', async ({ page, request }) => {
-  const { a, b, c, planning, review } = await seed(request);
-  await controlledRefresh(page);
-  await page.goto(`/?tag=${planning.id}&tag=${review.id}&draft=${a}&sort=tag`);
+test('selecting a second tag narrows results to drafts with both tags', async ({ page, request }) => {
+  const { a, b, planning, review } = await seed(request);
+  await page.goto('/');
+  await page.locator('#tag-filter-summary').click();
+  await page.locator(`[data-tag-choice="${planning.id}"]`).check();
   await expect(visibleRows(page)).toHaveCount(2);
+  await page.locator(`[data-tag-choice="${review.id}"]`).check();
+  await expect(visibleRows(page)).toHaveCount(1);
+  await expect(visibleRows(page)).toHaveAttribute('data-draft-id', b);
+  await expect(page.locator(`.draft-row[data-draft-id="${a}"]`)).toBeHidden();
+  await page.locator(`[data-tag-choice="${review.id}"]`).uncheck();
+  await expect(visibleRows(page)).toHaveCount(2);
+});
+
+test('tag filters combine with repository, search and availability; URL and snapshots retain state', async ({ page, request }) => {
+  const { b, c, planning, review } = await seed(request);
+  await controlledRefresh(page);
+  await page.goto(`/?tag=${planning.id}&tag=${review.id}&draft=${b}&sort=tag`);
+  await expect(visibleRows(page)).toHaveCount(1);
   await expect(page.locator('#tag-selections .tag-chip')).toHaveCount(3);
-  await page.locator('#repo-filter').selectOption('test/one');
+  await page.locator('#repo-filter').selectOption('test/two');
   await expect(visibleRows(page)).toHaveCount(1);
   await page.locator('#draft-search').fill('planning');
   await expect(visibleRows(page)).toHaveCount(1);
   await refresh(page);
   await expect(page.locator('#draft-search')).toHaveValue('planning');
-  await expect(page.locator('#repo-filter')).toHaveValue('test/one');
-  await expect(page.locator('#detail-id')).toHaveText(a);
+  await expect(page.locator('#repo-filter')).toHaveValue('test/two');
+  await expect(page.locator('#detail-id')).toHaveText(b);
   await page.reload();
   await expect(visibleRows(page)).toHaveCount(1);
   await page.locator('#tag-filter-summary').click();

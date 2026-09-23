@@ -27,7 +27,7 @@ Names accept ASCII letters, digits, spaces and hyphens, with a maximum of **32 c
 
 Open **Tags** in the toolbar and tick one or more tags. The list filters immediately while the dropdown stays open. Search within the dropdown to find a tag; longer lists scroll.
 
-- Multiple selected tags match **any** of them. Selecting `planning` and `needs-review` shows drafts carrying either label, including drafts with both.
+- Multiple selected tags match **all** of them. Selecting `planning` and `needs-review` shows drafts carrying both labels.
 - Repository, availability and text search narrow that result further. Text search also matches tag names.
 - **Untagged only** shows drafts with no tags and clears selected tag filters. Selecting a tag leaves Untagged mode.
 - Remove a selected filter chip to clear that filter, or choose **Clear all** to clear the tag filters.
