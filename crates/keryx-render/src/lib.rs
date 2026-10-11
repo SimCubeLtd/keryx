@@ -66,13 +66,21 @@ fn render_row(row: &DashboardDraft, selected: bool, management_enabled: bool) ->
         let pdf_url = format!("/api/drafts/{}/pdf", draft.draft_id);
         format!(
             r#"<div class="menu-group">
-          <a class="menu-item" href="{pdf_url}" download><span class="menu-icon">↓</span><span><span class="menu-label">Download PDF</span><span class="menu-help">Current immutable version</span></span></a>
+          <a class="menu-item" href="{pdf_url}" download><span class="menu-icon">↓</span><span><span class="menu-label">Download PDF</span><span class="menu-help">Current stored version</span></span></a>
           <a class="menu-item" href="{raw_url}" download="{download_name}"><span class="menu-icon">↓</span><span><span class="menu-label">Download HTML</span><span class="menu-help">Exact stored source</span></span></a>
+        </div>
+        <div class="menu-group">
+          <button class="menu-item" type="button" data-action="reset-history" data-draft-id="{id}"{reset_hidden}><span class="menu-icon">⌫</span><span><span class="menu-label">Reset and prune version history…</span><span class="menu-help">Delete older versions; reset latest to v1</span></span></button>
         </div>
         <div class="menu-group">
           <button class="menu-item" type="button" data-action="prune" data-draft-id="{id}" data-title="{title}"><span class="menu-icon">⌫</span><span><span class="menu-label">Prune draft</span><span class="menu-help">Stop serving; retain stored versions</span></span></button>
           <button class="menu-item danger" type="button" data-action="purge" data-draft-id="{id}" data-title="{title}"><span class="menu-icon">×</span><span><span class="menu-label">Force prune…</span><span class="menu-help">Permanently delete every version</span></span></button>
         </div>"#,
+            reset_hidden = if draft.version_count == 1 && version == 1 {
+                " hidden"
+            } else {
+                ""
+            },
             pdf_url = escape_html(&pdf_url),
             raw_url = escape_html(&draft.raw_url),
             download_name = escape_html(&download_name),
@@ -241,10 +249,10 @@ pub fn render_dashboard_detail(row: Option<&DashboardDraft>, management_enabled:
     <div class="meta-cell"><div class="meta-key">Latest branch</div><div class="meta-value mono" id="detail-branch">{branch}</div></div>
     <div class="meta-cell"><div class="meta-key">Draft ID</div><div class="meta-value mono" id="detail-id">{id}</div></div>
     <div class="meta-cell"><div class="meta-key">Updated</div><div class="meta-value" id="detail-updated">{updated}</div></div>
-    <div class="meta-cell"><div class="meta-key">Current</div><div class="meta-value" id="detail-version">Version {version} of {version_count}</div></div>
+    <div class="meta-cell"><div class="meta-key">Current</div><div class="meta-value" id="detail-version">v{version} · {version_count} {version_word}</div></div>
     <div class="meta-cell"><div class="meta-key">Latest commit</div><div class="meta-value" id="detail-commit">{commit}</div></div>
   </div>
-  <div class="history-head"><h3>Version history</h3><span class="history-state" id="history-state">{history_state}</span></div>
+  <div class="history-head"><h3>Version history</h3><span class="history-state" id="history-state">{history_state}</span>{reset_history_action}</div>
   <div id="version-history"></div>
   </div>
 </aside>"#,
@@ -272,6 +280,23 @@ pub fn render_dashboard_detail(row: Option<&DashboardDraft>, management_enabled:
         updated = escape_html(&draft.updated_at),
         version = version,
         version_count = draft.version_count,
+        version_word = if draft.version_count == 1 {
+            "version"
+        } else {
+            "versions"
+        },
+        reset_history_action = if management_enabled {
+            format!(
+                r#"<button class="button" id="reset-history" type="button"{hidden}>Reset and prune version history…</button>"#,
+                hidden = if draft.version_count == 1 && version == 1 {
+                    " hidden"
+                } else {
+                    ""
+                }
+            )
+        } else {
+            String::new()
+        },
         commit = escape_html(commit),
         history_state = if management_enabled {
             "Loading…"
@@ -472,6 +497,20 @@ pub fn render_dashboard(
       <div class="dialog-summary"><strong id="dialog-draft-title"></strong><span id="dialog-draft-id"></span></div>
       <div class="dialog-warning" id="dialog-warning"></div>
       <div class="dialog-actions"><button class="button" id="cancel-action" type="button">Cancel</button><button class="button" id="confirm-action" type="button">Prune draft</button></div>
+    </div>
+  </dialog>
+  <dialog id="reset-history-dialog" aria-labelledby="reset-history-title" aria-describedby="reset-history-description reset-history-warning">
+    <div class="dialog-body">
+      <h2 id="reset-history-title">Reset and prune version history?</h2>
+      <p id="reset-history-description"></p>
+      <div class="dialog-summary"><strong id="reset-history-draft-title"></strong><span id="reset-history-draft-id"></span></div>
+      <div class="reset-history-facts">
+        <div><strong>Keep and renumber</strong><span id="reset-history-kept"></span></div>
+        <div><strong>Delete permanently</strong><span id="reset-history-removed"></span></div>
+      </div>
+      <div class="dialog-warning" id="reset-history-warning">This cannot be undone. Existing versioned links may stop working or show different content. The main draft link stays unchanged.</div>
+      <p class="dialog-error" id="reset-history-error" role="alert" hidden></p>
+      <div class="dialog-actions"><button class="button" id="reset-history-cancel" type="button">Cancel</button><button class="button danger" id="reset-history-confirm" type="button" disabled>Reset and prune</button></div>
     </div>
   </dialog>
   <dialog id="snooze-dialog">

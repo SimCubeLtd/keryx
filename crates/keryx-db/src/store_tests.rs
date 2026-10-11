@@ -1006,3 +1006,173 @@ async fn tags_upgrade_a_populated_baseline_on_either_backend() {
     assert!(store.dashboard_tags().await.unwrap().catalogue.is_empty());
     assert!(store.dashboard_tags().await.unwrap().assignments.is_empty());
 }
+
+#[tokio::test]
+async fn prune_versions_resets_numbering_and_preserves_the_draft_and_current_content() {
+    let store = SeaOrmStore::open_test().await;
+    let meta = UploadMetadata {
+        git_commit_subject: Some("Latest content".into()),
+        ..Default::default()
+    };
+    let first = record(&store, "<p>old</p>", None, &meta).await.unwrap();
+    let second = record(&store, "<p>latest</p>", Some(first.draft_id.clone()), &meta)
+        .await
+        .unwrap();
+    let other = record(&store, "<p>other draft</p>", None, &meta)
+        .await
+        .unwrap();
+    let id = &first.draft_id;
+    let tags = store.attach_tag(id, "approved").await.unwrap();
+    store
+        .set_availability(
+            id,
+            &AvailabilityUpdate::Disabled {
+                reason: Some("Keep disabled".into()),
+            },
+        )
+        .await
+        .unwrap();
+    let before = draft::Entity::find_by_id(id)
+        .one(store.connection())
+        .await
+        .unwrap()
+        .unwrap();
+    let mut kept = draft_version::Entity::find_by_id(&second.version_id)
+        .one(store.connection())
+        .await
+        .unwrap()
+        .unwrap();
+    let old_key = draft_version::Entity::find_by_id(&first.version_id)
+        .one(store.connection())
+        .await
+        .unwrap()
+        .unwrap()
+        .object_key;
+    let other_before = store.list_versions(&other.draft_id).await.unwrap();
+    let events = event_kinds(&store, id).await;
+
+    let outcome = store.prune_versions(id, &second.version_id).await.unwrap();
+    assert_eq!(outcome.object_keys, vec![old_key]);
+    assert_eq!(outcome.kept_version_id, second.version_id);
+    assert_eq!(outcome.previous_version_number, 2);
+    assert_eq!(
+        draft::Entity::find_by_id(id)
+            .one(store.connection())
+            .await
+            .unwrap()
+            .unwrap(),
+        before
+    );
+    kept.version_number = 1;
+    assert_eq!(
+        draft_version::Entity::find_by_id(&second.version_id)
+            .one(store.connection())
+            .await
+            .unwrap()
+            .unwrap(),
+        kept
+    );
+    assert_eq!(store.dashboard_tags().await.unwrap().assignments[id], tags);
+    assert_eq!(event_kinds(&store, id).await, events);
+    assert_eq!(
+        serde_json::to_value(store.list_versions(&other.draft_id).await.unwrap()).unwrap(),
+        serde_json::to_value(other_before).unwrap()
+    );
+    let summary = store.get_draft_summary(id).await.unwrap().unwrap();
+    assert_eq!(summary.version_count, 1);
+    assert_eq!(summary.latest_version_number, Some(1));
+    assert!(summary.disabled);
+    let repeat = store.prune_versions(id, &second.version_id).await.unwrap();
+    assert!(repeat.object_keys.is_empty());
+    assert_eq!(repeat.previous_version_number, 1);
+    let next = record(&store, "<p>next</p>", Some(id.clone()), &meta)
+        .await
+        .unwrap();
+    assert_eq!(next.version_number, 2);
+}
+
+#[tokio::test]
+async fn prune_versions_rejects_stale_and_deleted_drafts_and_resets_a_lone_numbered_version() {
+    let store = SeaOrmStore::open_test().await;
+    let meta = UploadMetadata::default();
+    let first = record(&store, "<p>old</p>", None, &meta).await.unwrap();
+    let second = record(&store, "<p>new</p>", Some(first.draft_id.clone()), &meta)
+        .await
+        .unwrap();
+    let id = &first.draft_id;
+    assert!(matches!(
+        store.prune_versions(id, &first.version_id).await,
+        Err(PruneVersionsError::VersionChanged)
+    ));
+    assert_eq!(store.list_versions(id).await.unwrap().len(), 2);
+    assert!(matches!(
+        store.prune_versions("missing", &second.version_id).await,
+        Err(PruneVersionsError::DraftNotFound)
+    ));
+    // A lone version can retain a higher number after external history cleanup.
+    draft_version::Entity::delete_by_id(first.version_id)
+        .exec(store.connection())
+        .await
+        .unwrap();
+    let outcome = store.prune_versions(id, &second.version_id).await.unwrap();
+    assert!(outcome.object_keys.is_empty());
+    assert_eq!(outcome.previous_version_number, 2);
+    assert_eq!(store.list_versions(id).await.unwrap()[0].version_number, 1);
+    store.soft_delete_draft(id).await.unwrap();
+    assert!(matches!(
+        store.prune_versions(id, &second.version_id).await,
+        Err(PruneVersionsError::DraftNotFound)
+    ));
+    assert_eq!(store.list_versions(id).await.unwrap().len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn prune_versions_and_upload_serialize_without_deleting_the_new_upload() {
+    let store = std::sync::Arc::new(SeaOrmStore::open_test().await);
+    let meta = UploadMetadata::default();
+    let first = record(&store, "<p>old</p>", None, &meta).await.unwrap();
+    let second = record(
+        &store,
+        "<p>current</p>",
+        Some(first.draft_id.clone()),
+        &meta,
+    )
+    .await
+    .unwrap();
+    let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(2));
+    let resetting = tokio::spawn({
+        let (store, barrier, id, version) = (
+            store.clone(),
+            barrier.clone(),
+            first.draft_id.clone(),
+            second.version_id,
+        );
+        async move {
+            barrier.wait().await;
+            store.prune_versions(&id, &version).await
+        }
+    });
+    barrier.wait().await;
+    let uploaded = record(
+        &store,
+        "<p>concurrent upload</p>",
+        Some(first.draft_id.clone()),
+        &meta,
+    )
+    .await
+    .unwrap();
+    let reset = resetting.await.unwrap();
+    let versions = store.list_versions(&first.draft_id).await.unwrap();
+    assert_eq!(versions[0].id, uploaded.version_id);
+    match reset {
+        Ok(_) => {
+            assert_eq!(uploaded.version_number, 2);
+            assert_eq!(versions.len(), 2);
+        }
+        Err(PruneVersionsError::VersionChanged) => {
+            assert_eq!(uploaded.version_number, 3);
+            assert_eq!(versions.len(), 3);
+        }
+        Err(error) => panic!("unexpected reset failure: {error}"),
+    }
+}

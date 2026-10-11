@@ -56,12 +56,14 @@ live. A notification click accepts only a same-origin path and focuses and
 navigates an existing Keryx window, or opens one.
 
 Notification types are **Plan published** (first upload, opens `/d/:id`),
-**Plan revised** (later upload, opens the immutable `/d/:id/v/:n`), **Plan
+**Plan revised** (later upload, opens `/d/:id/v/:n`), **Plan
 woke** (a snooze expired, opens the draft), **Plan enabled**, and **Plan
 disabled** (open the matching dashboard tab). Snoozing and unsnoozing are the
 owner's own attention management and produce no event. PDF publication and
 download never create an event. Each device chooses which types it receives
 from the Notifications control; preferences are stored per subscription.
+Resetting and pruning version history can make an old notification link
+unavailable or point it at different content because version numbers are reused.
 
 Delivery is store-first: an event is written in the same SQLite transaction
 as the draft change and queued once per opted-in subscription, then a

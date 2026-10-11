@@ -387,7 +387,10 @@
     setText("detail-branch", row.dataset.branch);
     setText("detail-id", row.dataset.draftId);
     setText("detail-updated", relativeTime(row.dataset.updated));
-    setText("detail-version", "Version " + row.dataset.latestVersion + " of " + row.dataset.versionCount);
+    var versionCount = Number(row.dataset.versionCount);
+    setText("detail-version", "v" + row.dataset.latestVersion + " · " + versionCount + (versionCount === 1 ? " version" : " versions"));
+    var resetHistory = document.getElementById("reset-history");
+    if (resetHistory) resetHistory.hidden = !canResetHistory(row);
     setText("detail-commit", row.dataset.commitSubject || row.dataset.commitSha);
 
     var availability = document.getElementById("detail-availability");
@@ -479,7 +482,9 @@
     }
   }
 
+  var historyRequest = 0;
   function loadVersions(draftId) {
+    var request = ++historyRequest;
     var state = document.getElementById("history-state");
     state.textContent = "Loading…";
     fetch("/api/drafts/" + encodeURIComponent(draftId), { headers: { Accept: "application/json" } })
@@ -492,13 +497,13 @@
         return response.json();
       })
       .then(function (body) {
-        if (selectedId !== draftId) return;
+        if (selectedId !== draftId || request !== historyRequest) return;
         var versions = body.draft.versions || [];
         state.textContent = versions.length + (versions.length === 1 ? " version" : " versions");
         renderVersions(versions, draftId, false);
       })
       .catch(function (error) {
-        if (selectedId !== draftId) return;
+        if (selectedId !== draftId || request !== historyRequest) return;
         state.textContent = error.message;
         document.getElementById("version-history").replaceChildren();
       });
@@ -591,7 +596,13 @@
     return rows.find(function (candidate) { return candidate.dataset.draftId === draftId; });
   }
 
+  function canResetHistory(row) {
+    return Number(row.dataset.versionCount) > 1 || Number(row.dataset.latestVersion) > 1;
+  }
+
   function bindRow(row) {
+    var reset = row.querySelector('[data-action="reset-history"]');
+    if (reset) reset.hidden = !canResetHistory(row);
     syncAvailability(row);
     renderRowTime(row);
     row.addEventListener("click", function (event) {
@@ -609,7 +620,10 @@
     });
     if (managementEnabled) {
       row.querySelectorAll("[data-action]").forEach(function (button) {
-        button.addEventListener("click", function () { openPruneDialog(button); });
+        button.addEventListener("click", function () {
+          if (button.dataset.action === "reset-history") openResetHistoryDialog(row);
+          else openPruneDialog(button);
+        });
       });
     }
   }
@@ -815,6 +829,126 @@
     bindDetailActions();
   } else {
     var bindDetailActions = function () {};
+  }
+
+  // Both history entry points use a dialog that owns its target across snapshots.
+  var resetDialog = document.getElementById("reset-history-dialog");
+  var resetConfirm = document.getElementById("reset-history-confirm");
+  var resetCancel = document.getElementById("reset-history-cancel");
+  var resetSession = null;
+
+  function bindResetHistoryAction() {
+    var button = document.getElementById("reset-history");
+    if (!button || button.dataset.bound === "true") return;
+    button.dataset.bound = "true";
+    button.addEventListener("click", function () {
+      var row = findRow(selectedId);
+      if (row) openResetHistoryDialog(row);
+    });
+  }
+
+  function resetHistoryError(message) {
+    var error = document.getElementById("reset-history-error");
+    error.textContent = message;
+    error.hidden = !message;
+  }
+
+  function loadResetHistory(session) {
+    session.versionId = null;
+    resetConfirm.disabled = true;
+    setText("reset-history-description", "Loading version history…");
+    setText("reset-history-kept", "Loading…");
+    setText("reset-history-removed", "Loading…");
+    return fetch("/api/drafts/" + encodeURIComponent(session.draftId), { headers: { Accept: "application/json" } })
+      .then(function (response) {
+        return response.json().then(function (body) {
+          if (!response.ok) throw new Error(body.error || "Version history unavailable.");
+          return body.draft;
+        });
+      })
+      .then(function (detail) {
+        if (resetSession !== session) return;
+        var latest = detail.versions[0];
+        if (!latest) throw new Error("This draft has no stored versions.");
+        var removed = detail.versions.length - 1;
+        setText("reset-history-draft-title", detail.draft.title);
+        setText("reset-history-description", "Permanently delete " + removed + " older " + (removed === 1 ? "version" : "versions") + " and renumber v" + latest.versionNumber + " as v1. The next upload will be v2.");
+        setText("reset-history-kept", "v" + latest.versionNumber + " → v1 · latest content");
+        setText("reset-history-removed", removed + (removed === 1 ? " older version" : " older versions"));
+        if (removed === 0 && latest.versionNumber === 1) {
+          setText("reset-history-description", "This draft already contains only v1. There is nothing to reset or prune.");
+          refreshDashboard();
+          return;
+        }
+        session.versionId = latest.id;
+        resetConfirm.disabled = false;
+      });
+  }
+
+  function openResetHistoryDialog(row) {
+    var session = { draftId: row.dataset.draftId, versionId: null, pending: false };
+    resetSession = session;
+    resetHistoryError("");
+    setText("reset-history-draft-title", row.dataset.title);
+    setText("reset-history-draft-id", session.draftId);
+    var menu = row.querySelector(".row-menu");
+    if (menu) menu.open = false;
+    resetDialog.showModal();
+    loadResetHistory(session).catch(function (error) {
+      if (resetSession === session) resetHistoryError(error.message);
+    });
+  }
+
+  if (managementEnabled) {
+    bindResetHistoryAction();
+    resetCancel.addEventListener("click", function () { resetDialog.close(); });
+    resetDialog.addEventListener("cancel", function (event) {
+      if (resetSession && resetSession.pending) event.preventDefault();
+    });
+    resetDialog.addEventListener("close", function () { resetSession = null; });
+    resetConfirm.addEventListener("click", function () {
+      var session = resetSession;
+      if (!session || !session.versionId || session.pending) return;
+      session.pending = true;
+      resetConfirm.disabled = true;
+      resetCancel.disabled = true;
+      resetHistoryError("");
+      fetch("/api/drafts/" + encodeURIComponent(session.draftId) + "/versions/prune", {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ expectedCurrentVersionId: session.versionId })
+      }).then(function (response) {
+        return response.json().then(function (body) {
+          if (!response.ok) {
+            var error = new Error(body.error || "Version history could not be reset.");
+            error.status = response.status;
+            throw error;
+          }
+          return body;
+        });
+      }).then(function (body) {
+        if (resetSession !== session) return;
+        resetDialog.close();
+        resetSession = null;
+        refreshDashboard();
+        showToast(body.cleanupComplete
+          ? "Version history reset to v1. Older versions pruned."
+          : "History reset to v1, but stored file cleanup is incomplete. Run keryx storage gc to remove orphan files.", !body.cleanupComplete);
+      }).catch(function (error) {
+        if (resetSession !== session) return;
+        resetHistoryError(error.message);
+        if (error.status === 409) {
+          refreshDashboard();
+          return loadResetHistory(session).catch(function (loadError) {
+            if (resetSession === session) resetHistoryError(loadError.message);
+          });
+        }
+      }).finally(function () {
+        session.pending = false;
+        resetCancel.disabled = false;
+        if (resetSession === session) resetConfirm.disabled = !session.versionId;
+      });
+    });
   }
 
   // --- prune ------------------------------------------------------------
@@ -1052,6 +1186,7 @@
         syncRepositoryFilter();
         reconcileTagSuggestions();
         bindDetailActions();
+        bindResetHistoryAction();
         applySort();
 
         var selected = findRow(selectedId);
