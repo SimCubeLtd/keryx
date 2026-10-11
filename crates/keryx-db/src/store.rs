@@ -30,8 +30,8 @@ use crate::entity::{
 };
 use crate::types::{
     canonical_tag_name, normalize_wake_time, AvailabilityError, BlobRecord, DashboardTags,
-    NewUpload, PendingDelivery, ServedVersion, TagError, UploadError, UploadOutcome,
-    DEFAULT_DISABLE_REASON,
+    NewUpload, PendingDelivery, PruneVersionsError, PruneVersionsOutcome, ServedVersion, TagError,
+    UploadError, UploadOutcome, DEFAULT_DISABLE_REASON,
 };
 
 /// Draft and version metadata, availability, and the notification outbox.
@@ -91,6 +91,13 @@ pub trait DraftStore: Send + Sync {
     /// can delete the blobs, or None when the draft id does not exist at all.
     /// Soft-deleted drafts can be purged; that is the point.
     async fn purge_draft(&self, draft_id: &str) -> Result<Option<Vec<String>>>;
+    /// Delete older versions and renumber the current one to v1 atomically.
+    /// Reject a stale confirmation; retain the current internal ID and blob.
+    async fn prune_versions(
+        &self,
+        draft_id: &str,
+        expected_current_version_id: &str,
+    ) -> Result<PruneVersionsOutcome, PruneVersionsError>;
     /// Hard-delete everything soft-deleted. Answers the number of drafts
     /// removed and the object keys of their blobs.
     async fn purge_deleted_drafts(&self) -> Result<(usize, Vec<String>)>;
@@ -862,6 +869,63 @@ impl DraftStore for SeaOrmStore {
         draft::Entity::delete_by_id(draft_id).exec(&tx).await?;
         tx.commit().await?;
         Ok(Some(keys))
+    }
+
+    async fn prune_versions(
+        &self,
+        draft_id: &str,
+        expected_current_version_id: &str,
+    ) -> Result<PruneVersionsOutcome, PruneVersionsError> {
+        let tx = self.begin_write().await?;
+        let mut live =
+            draft::Entity::find_by_id(draft_id).filter(draft::Column::DeletedAt.is_null());
+        // Match upload locking so a new version cannot arrive between checking
+        // the confirmation and resetting the history.
+        if tx.get_database_backend() == DbBackend::Postgres {
+            live = live.lock_exclusive();
+        }
+        let current = live
+            .one(&tx)
+            .await?
+            .ok_or(PruneVersionsError::DraftNotFound)?;
+        if current.current_version_id.as_deref() != Some(expected_current_version_id) {
+            return Err(PruneVersionsError::VersionChanged);
+        }
+        let kept = draft_version::Entity::find_by_id(expected_current_version_id)
+            .filter(draft_version::Column::DraftId.eq(draft_id))
+            .one(&tx)
+            .await?
+            .ok_or_else(|| DbErr::Custom("draft's current version is missing".into()))?;
+        let older = || {
+            draft_version::Entity::find()
+                .filter(draft_version::Column::DraftId.eq(draft_id))
+                .filter(draft_version::Column::Id.ne(expected_current_version_id))
+        };
+        let object_keys = older()
+            .select_only()
+            .column(draft_version::Column::ObjectKey)
+            .into_tuple::<String>()
+            .all(&tx)
+            .await?;
+        draft_version::Entity::delete_many()
+            .filter(draft_version::Column::DraftId.eq(draft_id))
+            .filter(draft_version::Column::Id.ne(expected_current_version_id))
+            .exec(&tx)
+            .await?;
+        // Delete the old v1 first to satisfy UNIQUE (draft_id, version_number).
+        if kept.version_number != 1 {
+            draft_version::Entity::update_many()
+                .col_expr(draft_version::Column::VersionNumber, Expr::value(1))
+                .filter(draft_version::Column::Id.eq(expected_current_version_id))
+                .exec(&tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(PruneVersionsOutcome {
+            kept_version_id: kept.id,
+            previous_version_number: kept.version_number,
+            object_keys,
+        })
     }
 
     async fn purge_deleted_drafts(&self) -> Result<(usize, Vec<String>)> {

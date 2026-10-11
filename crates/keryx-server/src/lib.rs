@@ -30,8 +30,8 @@ use keryx_core::types::{
     PushSubscriptionInput, UploadMetadata, UploadResponse,
 };
 use keryx_db::{
-    AvailabilityError, DashboardTags, DatabaseConfig, DraftStore, NewUpload, SeaOrmStore, TagError,
-    UploadError,
+    AvailabilityError, DashboardTags, DatabaseConfig, DraftStore, NewUpload, PruneVersionsError,
+    SeaOrmStore, TagError, UploadError,
 };
 use keryx_policy::{validate_html, PolicyOptions, DEFAULT_MAX_HTML_BYTES};
 use keryx_render::pdf::{render_version_pdf, PdfIdentity};
@@ -415,6 +415,10 @@ fn build_router(state: SharedState, max_html_bytes: usize) -> Router {
         .route("/api/drafts/{draft_id}/pdf", get(publish_pdf))
         .route("/api/drafts/{draft_id}/availability", put(set_availability))
         .route("/api/drafts/{draft_id}/disable", post(disable_draft))
+        .route(
+            "/api/drafts/{draft_id}/versions/prune",
+            post(prune_versions),
+        )
         .route("/api/purge", post(purge_deleted))
         .route("/api/push/vapid", get(push_vapid))
         .route(
@@ -1032,6 +1036,77 @@ async fn delete_draft(
         Ok(false) => json_error(StatusCode::NOT_FOUND, "Draft not found."),
         Err(error) => internal_error(error),
     }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PruneVersionsBody {
+    expected_current_version_id: String,
+}
+
+/// Clear one draft's history without replacing its current blob or internal ID.
+async fn prune_versions(
+    State(state): State<SharedState>,
+    Path(draft_id): Path<String>,
+    headers: HeaderMap,
+    body: Result<Json<PruneVersionsBody>, JsonRejection>,
+) -> Response {
+    if !authorized(&state, &headers) {
+        return unauthorized();
+    }
+    let request = match body {
+        Ok(Json(request)) => request,
+        Err(_) => return json_error(StatusCode::BAD_REQUEST, "Expected a current version ID."),
+    };
+    if request.expected_current_version_id.len() != 20
+        || !request
+            .expected_current_version_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric())
+    {
+        return json_error(StatusCode::BAD_REQUEST, "Invalid current version ID.");
+    }
+    let outcome = match state
+        .db
+        .prune_versions(&draft_id, &request.expected_current_version_id)
+        .await
+    {
+        Ok(outcome) => outcome,
+        Err(PruneVersionsError::DraftNotFound) => {
+            return json_error(StatusCode::NOT_FOUND, "Draft not found.")
+        }
+        Err(PruneVersionsError::VersionChanged) => {
+            return json_error(
+                StatusCode::CONFLICT,
+                "The latest version has changed. Review the history before confirming again.",
+            )
+        }
+        Err(PruneVersionsError::Other(error)) => return internal_error(error.into()),
+    };
+    if !outcome.object_keys.is_empty() || outcome.previous_version_number != 1 {
+        state.dashboard_updates.changed();
+    }
+    // Metadata is already committed. Report failed cleanup honestly; garbage
+    // collection can remove these unreferenced blobs without risking the kept one.
+    let cleanup_complete = if outcome.object_keys.is_empty() {
+        true
+    } else {
+        match state.store.remove_many(&outcome.object_keys).await {
+            Ok(()) => true,
+            Err(error) => {
+                eprintln!("failed to remove pruned version blobs for {draft_id}: {error:#}");
+                false
+            }
+        }
+    };
+    Json(json!({
+        "ok": true,
+        "keptVersionId": outcome.kept_version_id,
+        "versionNumber": 1,
+        "removedVersions": outcome.object_keys.len(),
+        "cleanupComplete": cleanup_complete,
+    }))
+    .into_response()
 }
 
 /// Housekeeping: hard-delete every soft-deleted draft and its files.
@@ -2021,6 +2096,235 @@ mod tests {
         assert_eq!(removed.len(), 1, "one remove_many call, not one per key");
         removed[0].sort();
         assert_eq!(removed[0], expected);
+    }
+
+    #[tokio::test]
+    async fn prune_versions_route_authorizes_and_rejects_invalid_or_stale_requests() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let state = test_state().await;
+        let meta = UploadMetadata::default();
+        let first = record(&state, "<p>old</p>", None, &meta).await;
+        let latest = record(&state, "<p>latest</p>", Some(first.draft_id.clone()), &meta).await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let app = build_router(state.clone(), DEFAULT_MAX_HTML_BYTES);
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let client = reqwest::Client::new();
+        let url = format!("{base}/api/drafts/{}/versions/prune", first.draft_id);
+        let mut updates = state.dashboard_updates.subscribe();
+        assert_eq!(
+            client
+                .post(&url)
+                .json(&json!({"expectedCurrentVersionId": latest.version_id}))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        for body in [
+            json!({}),
+            json!({"expectedCurrentVersionId": ""}),
+            json!({"expectedCurrentVersionId": latest.version_id, "unknown": true}),
+        ] {
+            assert_eq!(
+                client
+                    .post(&url)
+                    .bearer_auth("secret")
+                    .json(&body)
+                    .send()
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::BAD_REQUEST
+            );
+        }
+        assert_eq!(
+            client
+                .post(&url)
+                .bearer_auth("secret")
+                .json(&json!({"expectedCurrentVersionId": first.version_id}))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::CONFLICT
+        );
+        assert!(!updates.has_changed().unwrap());
+        assert_eq!(
+            state.db.list_versions(&first.draft_id).await.unwrap().len(),
+            2
+        );
+        assert_eq!(
+            client
+                .post(format!("{base}/api/drafts/missing/versions/prune"))
+                .bearer_auth("secret")
+                .json(&json!({"expectedCurrentVersionId": latest.version_id}))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        let response = client
+            .post(&url)
+            .bearer_auth("secret")
+            .json(&json!({"expectedCurrentVersionId": latest.version_id}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(updates.has_changed().unwrap());
+        updates.borrow_and_update();
+        assert_eq!(
+            state.db.list_versions(&first.draft_id).await.unwrap()[0].version_number,
+            1
+        );
+        state.db.soft_delete_draft(&first.draft_id).await.unwrap();
+        assert_eq!(
+            client
+                .post(&url)
+                .bearer_auth("secret")
+                .json(&json!({"expectedCurrentVersionId": latest.version_id}))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        assert!(!updates.has_changed().unwrap());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn prune_versions_removes_only_older_blobs_and_reuses_version_numbers() {
+        let backend = Arc::new(ScriptedBackend::new());
+        let state = test_state_with(backend.clone()).await;
+        let meta = UploadMetadata::default();
+        let first = record(&state, "<p>old</p>", None, &meta).await;
+        let latest = record(&state, "<p>latest</p>", Some(first.draft_id.clone()), &meta).await;
+        let other = record(&state, "<p>other</p>", None, &meta).await;
+        let mut updates = state.dashboard_updates.subscribe();
+        let response = prune_versions(
+            State(state.clone()),
+            Path(first.draft_id.clone()),
+            bearer(),
+            Ok(Json(PruneVersionsBody {
+                expected_current_version_id: latest.version_id.clone(),
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            json_body(response).await,
+            json!({ "ok": true, "keptVersionId": latest.version_id, "versionNumber": 1, "removedVersions": 1, "cleanupComplete": true })
+        );
+        assert!(updates.has_changed().unwrap());
+        updates.borrow_and_update();
+        assert_eq!(
+            *backend.removed.lock().unwrap(),
+            vec![vec![object_key(&first.draft_id, &first.version_id)]]
+        );
+        assert_eq!(
+            backend
+                .get(&object_key(&first.draft_id, &first.version_id))
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            backend
+                .get(&object_key(&latest.draft_id, &latest.version_id))
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("<p>latest</p>")
+        );
+        assert_eq!(
+            backend
+                .get(&object_key(&other.draft_id, &other.version_id))
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("<p>other</p>")
+        );
+        for version in [None, Some(1)] {
+            let response = serve_draft(&state, &first.draft_id, version).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+                "<p>latest</p>"
+            );
+        }
+        assert_eq!(
+            serve_draft(&state, &first.draft_id, Some(2)).await.status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            publish_pdf(
+                State(state.clone()),
+                Path(first.draft_id.clone()),
+                Query(PdfQuery { version: Some(2) }),
+                bearer()
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+        let repeat = prune_versions(
+            State(state.clone()),
+            Path(first.draft_id.clone()),
+            bearer(),
+            Ok(Json(PruneVersionsBody {
+                expected_current_version_id: latest.version_id,
+            })),
+        )
+        .await;
+        assert_eq!(json_body(repeat).await["removedVersions"], 0);
+        assert!(!updates.has_changed().unwrap());
+        assert_eq!(backend.removed.lock().unwrap().len(), 1);
+        let next = record(&state, "<p>next</p>", Some(first.draft_id), &meta).await;
+        assert_eq!(next.version_number, 2);
+    }
+
+    #[tokio::test]
+    async fn prune_versions_reports_incomplete_blob_cleanup() {
+        let backend = Arc::new(ScriptedBackend {
+            fail_remove: true,
+            ..ScriptedBackend::new()
+        });
+        let state = test_state_with(backend.clone()).await;
+        let meta = UploadMetadata::default();
+        let first = record(&state, "<p>old</p>", None, &meta).await;
+        let latest = record(&state, "<p>latest</p>", Some(first.draft_id.clone()), &meta).await;
+        let response = prune_versions(
+            State(state.clone()),
+            Path(first.draft_id.clone()),
+            bearer(),
+            Ok(Json(PruneVersionsBody {
+                expected_current_version_id: latest.version_id.clone(),
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(json_body(response).await["cleanupComplete"], false);
+        let records = state.db.blob_records().await.unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].object_key,
+            object_key(&latest.draft_id, &latest.version_id)
+        );
+        assert!(backend
+            .get(&object_key(&first.draft_id, &first.version_id))
+            .await
+            .unwrap()
+            .is_some());
+        assert_eq!(
+            state.db.list_versions(&first.draft_id).await.unwrap()[0].version_number,
+            1
+        );
     }
 
     #[tokio::test]

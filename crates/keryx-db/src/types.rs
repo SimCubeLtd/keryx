@@ -52,6 +52,49 @@ impl std::fmt::Display for UploadError {
 
 impl std::error::Error for UploadError {}
 
+/// Metadata committed before the caller removes only the pruned blobs.
+#[derive(Debug)]
+pub struct PruneVersionsOutcome {
+    pub kept_version_id: String,
+    pub previous_version_number: i64,
+    pub object_keys: Vec<String>,
+}
+
+#[derive(Debug)]
+pub enum PruneVersionsError {
+    DraftNotFound,
+    VersionChanged,
+    Other(sea_orm::DbErr),
+}
+
+impl std::fmt::Display for PruneVersionsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DraftNotFound => write!(f, "Draft not found."),
+            Self::VersionChanged => write!(
+                f,
+                "The latest version has changed. Review the history before confirming again."
+            ),
+            Self::Other(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for PruneVersionsError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Other(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl From<sea_orm::DbErr> for PruneVersionsError {
+    fn from(error: sea_orm::DbErr) -> Self {
+        Self::Other(error)
+    }
+}
+
 pub struct ServedVersion {
     pub draft_id: String,
     pub version_number: i64,
