@@ -4,6 +4,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+#[cfg_attr(test, derive(specta::Type))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DraftSummary {
@@ -13,7 +14,9 @@ pub struct DraftSummary {
     pub repo_org: Option<String>,
     pub repo_name: Option<String>,
     pub repo_host: Option<String>,
+    #[cfg_attr(test, specta(type = Option<specta_typescript::Number>))]
     pub latest_version_number: Option<i64>,
+    #[cfg_attr(test, specta(type = specta_typescript::Number))]
     pub version_count: i64,
     pub created_at: String,
     pub updated_at: String,
@@ -45,6 +48,7 @@ impl DraftSummary {
 
 /// The three exclusive availability states. Snoozed drafts still serve;
 /// disabled drafts do not.
+#[cfg_attr(test, derive(specta::Type))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Availability {
@@ -83,6 +87,7 @@ impl Availability {
 /// A requested availability transition. On the wire:
 /// `{"state":"active"}`, `{"state":"snoozed","until":"2026-08-28T08:00:00Z"}`,
 /// or `{"state":"disabled","reason":"Superseded"}`.
+#[cfg_attr(test, derive(specta::Type))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "lowercase")]
 pub enum AvailabilityUpdate {
@@ -98,6 +103,7 @@ pub enum AvailabilityUpdate {
 
 /// Draft activity worth telling an installed Keryx app about. PDF
 /// publication and download never produce one.
+#[cfg_attr(test, derive(specta::Type))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NotificationKind {
@@ -244,6 +250,7 @@ impl NotificationEvent {
 /// A browser's push subscription as the dashboard sends it. `events` of
 /// None keeps the stored preferences (or, for a new subscription, opts in
 /// to everything).
+#[cfg_attr(test, derive(specta::Type))]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PushSubscriptionInput {
@@ -253,6 +260,7 @@ pub struct PushSubscriptionInput {
     pub events: Option<Vec<NotificationKind>>,
 }
 
+#[cfg_attr(test, derive(specta::Type))]
 #[derive(Debug, Clone, Deserialize)]
 pub struct PushKeys {
     pub p256dh: String,
@@ -268,10 +276,12 @@ pub struct PushSubscriptionSummary {
     pub updated_at: String,
 }
 
+#[cfg_attr(test, derive(specta::Type))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VersionInfo {
     pub id: String,
+    #[cfg_attr(test, specta(type = specta_typescript::Number))]
     pub version_number: i64,
     pub created_at: String,
     #[serde(default)]
@@ -284,10 +294,12 @@ pub struct VersionInfo {
     pub git_commit_sha: Option<String>,
     pub git_commit_subject: Option<String>,
     pub git_dirty: Option<bool>,
+    #[cfg_attr(test, specta(type = specta_typescript::Number))]
     pub file_size: i64,
     pub original_filename: Option<String>,
 }
 
+#[cfg_attr(test, derive(specta::Type))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DraftDetail {
@@ -322,16 +334,81 @@ pub struct UploadMetadata {
 }
 
 /// Shared dashboard organisation metadata, independent of document summaries.
+#[cfg_attr(test, derive(specta::Type))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Tag {
     pub id: String,
     pub name: String,
 }
 
+/// Explicit dashboard allowlist. Adding fields to the CLI summary cannot expose them here.
+#[cfg_attr(test, derive(specta::Type))]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardSummary {
+    pub draft_id: String,
+    pub title: String,
+    pub description: Option<String>,
+    #[cfg_attr(test, specta(type = Option<specta_typescript::Number>))]
+    pub latest_version_number: Option<i64>,
+    #[cfg_attr(test, specta(type = specta_typescript::Number))]
+    pub version_count: i64,
+    pub updated_at: String,
+    pub disabled: bool,
+    pub snoozed_until: Option<String>,
+    pub public_url: String,
+    pub raw_url: String,
+    pub repo_org: Option<String>,
+    pub repo_name: Option<String>,
+    pub repo_host: Option<String>,
+    pub latest_git_branch: Option<String>,
+    pub latest_git_commit_sha: Option<String>,
+    pub latest_git_commit_subject: Option<String>,
+    pub latest_git_dirty: Option<bool>,
+}
+
+impl From<DraftSummary> for DashboardSummary {
+    fn from(draft: DraftSummary) -> Self {
+        Self {
+            draft_id: draft.draft_id,
+            title: draft.title,
+            description: draft.description,
+            latest_version_number: draft.latest_version_number,
+            version_count: draft.version_count,
+            updated_at: draft.updated_at,
+            disabled: draft.disabled,
+            snoozed_until: draft.snoozed_until,
+            public_url: draft.public_url,
+            raw_url: draft.raw_url,
+            repo_org: draft.repo_org,
+            repo_name: draft.repo_name,
+            repo_host: draft.repo_host,
+            latest_git_branch: draft.latest_git_branch,
+            latest_git_commit_sha: draft.latest_git_commit_sha,
+            latest_git_commit_subject: draft.latest_git_commit_subject,
+            latest_git_dirty: draft.latest_git_dirty,
+        }
+    }
+}
+
 /// A dashboard row. Tags are never part of the CLI/TUI summary contract.
+#[cfg_attr(test, derive(specta::Type))]
+#[derive(Debug, Clone, Serialize)]
 pub struct DashboardDraft {
-    pub summary: DraftSummary,
+    pub summary: DashboardSummary,
     pub tags: Vec<Tag>,
+}
+
+/// Public dashboard data. Protected metadata is removed before constructing this response.
+#[cfg_attr(test, derive(specta::Type))]
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardSnapshot {
+    pub ok: bool,
+    pub management_enabled: bool,
+    pub drafts: Vec<DashboardDraft>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<Tag>>,
 }
 
 #[cfg(test)]
@@ -385,4 +462,50 @@ mod tests {
         assert!(serde_json::from_str::<AvailabilityUpdate>(r#"{"state":"snoozed"}"#).is_err());
         assert!(serde_json::from_str::<AvailabilityUpdate>(r#"{"state":"paused"}"#).is_err());
     }
+}
+
+/// A history reset retains the reviewed current version's internal identity.
+#[cfg_attr(test, derive(specta::Type))]
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PruneVersionsRequest {
+    pub expected_current_version_id: String,
+}
+
+#[cfg_attr(test, derive(specta::Type))]
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PruneVersionsResponse {
+    pub ok: bool,
+    pub kept_version_id: String,
+    #[cfg_attr(test, specta(type = specta_typescript::Number))]
+    pub version_number: i64,
+    #[cfg_attr(test, specta(type = specta_typescript::Number))]
+    pub removed_versions: usize,
+    pub cleanup_complete: bool,
+}
+
+#[cfg_attr(test, derive(specta::Type))]
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PurgeDraftResponse {
+    pub ok: bool,
+    pub purged: bool,
+    pub cleanup_complete: bool,
+}
+
+/// Legacy single-tag callers and staged multi-tag assignment share one endpoint.
+#[cfg_attr(test, derive(specta::Type))]
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum TagAssignmentRequest {
+    Single { name: String },
+    Multiple { names: Vec<String> },
+}
+
+#[cfg_attr(test, derive(specta::Type))]
+#[derive(Debug, Serialize)]
+pub struct TagAssignmentResponse {
+    pub ok: bool,
+    pub tags: Vec<Tag>,
 }

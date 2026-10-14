@@ -1,6 +1,7 @@
 //! HTTP server. One optional API key guards mutations, listings, and PDF
 //! publication; draft HTML serving remains public.
 
+mod frontend;
 mod notifications;
 mod realtime;
 
@@ -26,18 +27,17 @@ use crate::notifications::{PushHub, VapidIdentity};
 use crate::realtime::DashboardUpdates;
 use keryx_core::ids::new_internal_id;
 use keryx_core::types::{
-    Availability, AvailabilityUpdate, DashboardDraft, DraftDetail, DraftSummary,
-    PushSubscriptionInput, UploadMetadata, UploadResponse,
+    AvailabilityUpdate, DashboardDraft, DashboardSnapshot, DraftDetail, DraftSummary,
+    PruneVersionsRequest, PruneVersionsResponse, PurgeDraftResponse, PushSubscriptionInput,
+    TagAssignmentRequest, TagAssignmentResponse, UploadMetadata, UploadResponse,
 };
 use keryx_db::{
     AvailabilityError, DashboardTags, DatabaseConfig, DraftStore, NewUpload, PruneVersionsError,
-    SeaOrmStore, TagError, UploadError,
+    PurgeDraftOutcome, SeaOrmStore, TagError, UploadError,
 };
 use keryx_policy::{validate_html, PolicyOptions, DEFAULT_MAX_HTML_BYTES};
 use keryx_render::pdf::{render_version_pdf, PdfIdentity};
-use keryx_render::{
-    render_dashboard, render_dashboard_detail, render_dashboard_rows, render_not_found,
-};
+use keryx_render::render_not_found;
 use keryx_store::{create_backend, object_key, BackendConfig, BlobBackend, DiskConfig, S3Config};
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -398,7 +398,8 @@ async fn wait_for_signal() {
 
 fn build_router(state: SharedState, max_html_bytes: usize) -> Router {
     Router::new()
-        .route("/", get(dashboard))
+        .route("/", get(frontend::dashboard))
+        .route("/assets/{*path}", get(frontend::javascript_asset))
         .route("/api/dashboard/events", get(dashboard_events))
         .route("/api/dashboard/snapshot", get(dashboard_snapshot))
         .route("/api/dashboard/drafts/{draft_id}/tags", post(attach_tag))
@@ -536,21 +537,6 @@ fn fill_urls(draft: &mut DraftSummary, base: &str) {
 
 // --- handlers ---------------------------------------------------------------
 
-async fn dashboard(State(state): State<SharedState>, headers: HeaderMap) -> Response {
-    let base = base_url(&state, &headers);
-    let drafts = dashboard_drafts(&state, &base).await;
-    match drafts {
-        Ok((drafts, tags)) => Html(render_dashboard(
-            &drafts,
-            &tags.catalogue,
-            &base,
-            state.api_key_hash.is_none(),
-        ))
-        .into_response(),
-        Err(error) => internal_error(error),
-    }
-}
-
 async fn dashboard_drafts(
     state: &AppState,
     base: &str,
@@ -572,7 +558,7 @@ async fn dashboard_drafts(
                 .remove(&summary.draft_id)
                 .unwrap_or_default();
             DashboardDraft {
-                summary,
+                summary: summary.into(),
                 tags: assigned,
             }
         })
@@ -580,64 +566,41 @@ async fn dashboard_drafts(
     Ok((rows, tags))
 }
 
-#[derive(Deserialize, Default)]
-struct DashboardSnapshotQuery {
-    selected: Option<String>,
-}
-
-/// Return the server-rendered mutable parts of the dashboard. This route is
-/// public like `/`, but protected deployments still redact management data.
-async fn dashboard_snapshot(
-    State(state): State<SharedState>,
-    Query(query): Query<DashboardSnapshotQuery>,
-    headers: HeaderMap,
-) -> Response {
+/// Public like the dashboard. Authentication does not change its redacted public view.
+async fn dashboard_snapshot(State(state): State<SharedState>, headers: HeaderMap) -> Response {
     let base = base_url(&state, &headers);
-    let (drafts, tags) = match dashboard_drafts(&state, &base).await {
+    let (mut drafts, tags) = match dashboard_drafts(&state, &base).await {
         Ok(drafts) => drafts,
         Err(error) => return internal_error(error),
     };
-    let selected = query
-        .selected
-        .as_deref()
-        .and_then(|selected| {
-            drafts
-                .iter()
-                .find(|draft| draft.summary.draft_id == selected)
-        })
-        .or_else(|| {
-            drafts
-                .iter()
-                .find(|draft| draft.summary.availability() == Availability::Active)
-        })
-        .or_else(|| drafts.first());
     let management_enabled = state.api_key_hash.is_none();
-
-    let mut snapshot = json!({
-        "ok": true,
-        "rows": render_dashboard_rows(
-            &drafts,
-            selected.map(|draft| draft.summary.draft_id.as_str()),
-            management_enabled,
-        ),
-        "detail": render_dashboard_detail(selected, management_enabled),
-    });
-    if management_enabled {
-        snapshot["tags"] = json!(tags.catalogue);
+    if !management_enabled {
+        for row in &mut drafts {
+            let draft = &mut row.summary;
+            draft.repo_org = None;
+            draft.repo_name = None;
+            draft.repo_host = None;
+            draft.latest_git_branch = None;
+            draft.latest_git_commit_sha = None;
+            draft.latest_git_commit_subject = None;
+            draft.latest_git_dirty = None;
+            row.tags.clear();
+        }
     }
-    Json(snapshot).into_response()
-}
-
-#[derive(Deserialize)]
-struct AttachTag {
-    name: String,
+    Json(DashboardSnapshot {
+        ok: true,
+        management_enabled,
+        drafts,
+        tags: management_enabled.then_some(tags.catalogue),
+    })
+    .into_response()
 }
 
 async fn attach_tag(
     State(state): State<SharedState>,
     Path(draft_id): Path<String>,
     headers: HeaderMap,
-    input: Result<Json<AttachTag>, JsonRejection>,
+    input: Result<Json<TagAssignmentRequest>, JsonRejection>,
 ) -> Response {
     if !authorized(&state, &headers) {
         return unauthorized();
@@ -645,12 +608,28 @@ async fn attach_tag(
     let Ok(Json(input)) = input else {
         return json_error(StatusCode::BAD_REQUEST, "A tag name is required.");
     };
-    let name = match keryx_db::canonical_tag_name(&input.name) {
-        Ok(name) => name,
+    let (names, single) = match input {
+        TagAssignmentRequest::Single { name } => (vec![name], true),
+        TagAssignmentRequest::Multiple { names } => (names, false),
+    };
+    let names = match names
+        .iter()
+        .map(|name| keryx_db::canonical_tag_name(name))
+        .collect::<std::result::Result<Vec<_>, _>>()
+    {
+        Ok(names) => names,
         Err(error) => return json_error(StatusCode::BAD_REQUEST, &error.to_string()),
     };
-    let result = state.db.attach_tag(&draft_id, &name).await;
-    tag_response(&state, result, Some(&name))
+    let result = state.db.attach_tags(&draft_id, &names).await;
+    tag_response(
+        &state,
+        result,
+        if single {
+            names.first().map(String::as_str)
+        } else {
+            None
+        },
+    )
 }
 
 async fn detach_tag(
@@ -672,11 +651,10 @@ fn tag_response(
     match result {
         Ok(tags) => {
             state.dashboard_updates.changed();
-            let mut body = json!({ "ok": true, "tags": tags });
             if let Some(name) = attached_name {
-                body["tag"] = json!(tags.iter().find(|tag| tag.name == name));
+                return Json(json!({ "ok": true, "tag": tags.iter().find(|tag| tag.name == name), "tags": tags })).into_response();
             }
-            Json(body).into_response()
+            Json(TagAssignmentResponse { ok: true, tags }).into_response()
         }
         Err(TagError::DraftNotFound) => json_error(StatusCode::NOT_FOUND, "Draft not found."),
         Err(TagError::Invalid(message)) => json_error(StatusCode::BAD_REQUEST, &message),
@@ -1000,8 +978,14 @@ async fn publish_pdf(
 }
 
 #[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 struct DeleteQuery {
     purge: Option<bool>,
+    expected_current_version_id: Option<String>,
+}
+
+fn valid_version_id(id: &str) -> bool {
+    id.len() == 20 && id.bytes().all(|b| b.is_ascii_alphanumeric())
 }
 
 async fn delete_draft(
@@ -1014,15 +998,37 @@ async fn delete_draft(
         return unauthorized();
     }
 
+    if let Some(expected) = &query.expected_current_version_id {
+        if !query.purge.unwrap_or(false) || !valid_version_id(expected) {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "Expected a valid current version ID for permanent deletion.",
+            );
+        }
+    }
     if query.purge.unwrap_or(false) {
-        let result = state.db.purge_draft(&draft_id).await;
+        let result = state
+            .db
+            .purge_draft_checked(&draft_id, query.expected_current_version_id.as_deref())
+            .await;
         return match result {
-            Ok(Some(keys)) => {
+            Ok(PurgeDraftOutcome::Purged(keys)) => {
                 state.dashboard_updates.changed();
-                remove_blobs(&state, &keys).await;
-                Json(json!({ "ok": true, "purged": true })).into_response()
+                let cleanup_complete = remove_blobs(&state, &keys).await;
+                Json(PurgeDraftResponse {
+                    ok: true,
+                    purged: true,
+                    cleanup_complete,
+                })
+                .into_response()
             }
-            Ok(None) => json_error(StatusCode::NOT_FOUND, "Draft not found."),
+            Ok(PurgeDraftOutcome::NotFound) => {
+                json_error(StatusCode::NOT_FOUND, "Draft not found.")
+            }
+            Ok(PurgeDraftOutcome::VersionChanged) => json_error(
+                StatusCode::CONFLICT,
+                "The latest version has changed. Review the draft before deleting again.",
+            ),
             Err(error) => internal_error(error),
         };
     }
@@ -1038,18 +1044,12 @@ async fn delete_draft(
     }
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct PruneVersionsBody {
-    expected_current_version_id: String,
-}
-
 /// Clear one draft's history without replacing its current blob or internal ID.
 async fn prune_versions(
     State(state): State<SharedState>,
     Path(draft_id): Path<String>,
     headers: HeaderMap,
-    body: Result<Json<PruneVersionsBody>, JsonRejection>,
+    body: Result<Json<PruneVersionsRequest>, JsonRejection>,
 ) -> Response {
     if !authorized(&state, &headers) {
         return unauthorized();
@@ -1058,12 +1058,7 @@ async fn prune_versions(
         Ok(Json(request)) => request,
         Err(_) => return json_error(StatusCode::BAD_REQUEST, "Expected a current version ID."),
     };
-    if request.expected_current_version_id.len() != 20
-        || !request
-            .expected_current_version_id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric())
-    {
+    if !valid_version_id(&request.expected_current_version_id) {
         return json_error(StatusCode::BAD_REQUEST, "Invalid current version ID.");
     }
     let outcome = match state
@@ -1099,13 +1094,13 @@ async fn prune_versions(
             }
         }
     };
-    Json(json!({
-        "ok": true,
-        "keptVersionId": outcome.kept_version_id,
-        "versionNumber": 1,
-        "removedVersions": outcome.object_keys.len(),
-        "cleanupComplete": cleanup_complete,
-    }))
+    Json(PruneVersionsResponse {
+        ok: true,
+        kept_version_id: outcome.kept_version_id,
+        version_number: 1,
+        removed_versions: outcome.object_keys.len(),
+        cleanup_complete,
+    })
     .into_response()
 }
 
@@ -1131,13 +1126,15 @@ async fn purge_deleted(State(state): State<SharedState>, headers: HeaderMap) -> 
 /// orphan blobs for `keryx storage gc`: log it rather than failing the
 /// request. One `remove_many` call, because a purge can report thousands of
 /// keys and S3 deletes them in batches.
-async fn remove_blobs(state: &AppState, keys: &[String]) {
+async fn remove_blobs(state: &AppState, keys: &[String]) -> bool {
     if keys.is_empty() {
-        return;
+        return true;
     }
     if let Err(error) = state.store.remove_many(keys).await {
         eprintln!("failed to remove {} blobs: {error:#}", keys.len());
+        return false;
     }
+    true
 }
 
 /// `PUT /api/drafts/:id/availability`: the single transition endpoint for
@@ -1506,11 +1503,8 @@ mod tests {
             .await
             .unwrap();
         assert!(snapshot.get("tags").is_none());
-        assert!(!snapshot["rows"].as_str().unwrap().contains("data-tags="));
-        assert!(!snapshot["detail"]
-            .as_str()
-            .unwrap()
-            .contains("id=\"add-tag\""));
+        assert_eq!(snapshot["managementEnabled"], false);
+        assert_eq!(snapshot["drafts"][0]["tags"], json!([]));
         assert_eq!(
             client
                 .post(&url)
@@ -1570,6 +1564,44 @@ mod tests {
                 .status(),
             StatusCode::NOT_FOUND
         );
+        for payload in [
+            json!({"names": []}),
+            json!({"names": ["valid", "<bad>"]}),
+            json!({"name": "valid", "names": ["ambiguous"]}),
+        ] {
+            assert_eq!(
+                client
+                    .post(&url)
+                    .bearer_auth("secret")
+                    .json(&payload)
+                    .send()
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::BAD_REQUEST
+            );
+        }
+        assert_eq!(
+            client
+                .post(&url)
+                .json(&json!({"names": ["first", "second"]}))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let response = client
+            .post(&url)
+            .bearer_auth("secret")
+            .json(&json!({"names": [" First ", "second", "first"]}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["tags"].as_array().unwrap().len(), 2);
         let served = db
             .find_public_version(&upload.draft_id, None)
             .await
@@ -1731,20 +1763,15 @@ mod tests {
             .await;
         }
 
-        let snapshot = dashboard_snapshot(
-            State(state.clone()),
-            Query(DashboardSnapshotQuery::default()),
-            HeaderMap::new(),
-        )
-        .await;
+        let snapshot = dashboard_snapshot(State(state.clone()), HeaderMap::new()).await;
         assert_eq!(snapshot.status(), StatusCode::OK);
         let body = json_body(snapshot).await;
-        assert!(body["rows"].as_str().unwrap().contains("Protected"));
-        assert!(!body["rows"].as_str().unwrap().contains("SimCubeLtd"));
-        assert!(!body["detail"]
-            .as_str()
-            .unwrap()
-            .contains("feat/realtime-dashboard"));
+        assert_eq!(body["managementEnabled"], false);
+        assert_eq!(body["drafts"].as_array().unwrap().len(), 1);
+        let snapshot = body.to_string();
+        assert!(!snapshot.contains("SimCubeLtd"));
+        assert!(!snapshot.contains("feat/realtime-dashboard"));
+        assert!(body["drafts"][0]["summary"]["repoOrg"].is_null());
 
         let events = dashboard_events(State(state.clone())).await.into_response();
         assert_eq!(events.status(), StatusCode::OK);
@@ -2092,10 +2119,46 @@ mod tests {
         // The rows are gone, so the failed removal is logged, not fatal.
         assert_eq!(response.status(), StatusCode::OK);
 
+        assert_eq!(json_body(response).await["cleanupComplete"], false);
         let mut removed = backend.removed.lock().unwrap().clone();
         assert_eq!(removed.len(), 1, "one remove_many call, not one per key");
         removed[0].sort();
         assert_eq!(removed[0], expected);
+    }
+
+    #[tokio::test]
+    async fn permanent_delete_rejects_stale_review_without_removing_blobs() {
+        let backend = Arc::new(ScriptedBackend::new());
+        let state = test_state_with(backend.clone()).await;
+        let meta = UploadMetadata::default();
+        let first = record(&state, "<p>old</p>", None, &meta).await;
+        let latest = record(&state, "<p>new</p>", Some(first.draft_id.clone()), &meta).await;
+        for (expected, status) in [
+            (first.version_id.as_str(), StatusCode::CONFLICT),
+            ("invalid", StatusCode::BAD_REQUEST),
+            (latest.version_id.as_str(), StatusCode::OK),
+        ] {
+            let response = delete_draft(
+                State(state.clone()),
+                Path(first.draft_id.clone()),
+                Query(DeleteQuery {
+                    purge: Some(true),
+                    expected_current_version_id: Some(expected.to_owned()),
+                }),
+                bearer(),
+            )
+            .await;
+            assert_eq!(response.status(), status);
+            if status == StatusCode::OK {
+                assert_eq!(json_body(response).await["cleanupComplete"], true);
+            } else {
+                assert!(backend.removed.lock().unwrap().is_empty());
+                assert_eq!(
+                    state.db.list_versions(&first.draft_id).await.unwrap().len(),
+                    2
+                );
+            }
+        }
     }
 
     #[tokio::test]
@@ -2211,7 +2274,7 @@ mod tests {
             State(state.clone()),
             Path(first.draft_id.clone()),
             bearer(),
-            Ok(Json(PruneVersionsBody {
+            Ok(Json(PruneVersionsRequest {
                 expected_current_version_id: latest.version_id.clone(),
             })),
         )
@@ -2277,7 +2340,7 @@ mod tests {
             State(state.clone()),
             Path(first.draft_id.clone()),
             bearer(),
-            Ok(Json(PruneVersionsBody {
+            Ok(Json(PruneVersionsRequest {
                 expected_current_version_id: latest.version_id,
             })),
         )
@@ -2303,7 +2366,7 @@ mod tests {
             State(state.clone()),
             Path(first.draft_id.clone()),
             bearer(),
-            Ok(Json(PruneVersionsBody {
+            Ok(Json(PruneVersionsRequest {
                 expected_current_version_id: latest.version_id.clone(),
             })),
         )

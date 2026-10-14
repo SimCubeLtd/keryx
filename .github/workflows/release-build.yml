@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing release tag to build and attach assets to, e.g. v0.4.1"
+        description: "Existing release tag to build and attach assets to, e.g. v1.0.0"
         required: true
 
 permissions:
@@ -55,7 +55,8 @@ jobs:
         with:
           toolchain: nightly-2026-08-20
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test
+      - uses: ./.github/actions/frontend
+      - run: cargo test --locked
 
   package:
     name: package (${{ matrix.target }})
@@ -88,7 +89,8 @@ jobs:
         with:
           key: ${{ matrix.target }}-release
 
-      - run: cargo build --release --target ${{ matrix.target }}
+      - uses: ./.github/actions/frontend
+      - run: cargo build --release --locked --target ${{ matrix.target }}
 
       # The binary is the whole deliverable — server, CLI, and TUI in one executable with SQLite
       # bundled, so there is no support tree to find at runtime. The skill and README ride along
@@ -138,6 +140,21 @@ jobs:
             sleep 1
           done
           curl -fsS http://127.0.0.1:3777/healthz > /dev/null
+
+          # The UI must come from the executable, including the hashed bundles.
+          curl -fsS http://127.0.0.1:3777/ > dashboard.html
+          grep -q 'id="app"' dashboard.html
+          for extension in js css; do
+            asset=$(grep -Eo "/assets/[^\" ]+\.${extension}" dashboard.html | head -n 1)
+            test -n "$asset"
+            curl -fsS "http://127.0.0.1:3777${asset}" > "dashboard.${extension}"
+            cmp "${root}/frontend/dist${asset}" "dashboard.${extension}"
+          done
+          for asset in sw.js manifest.webmanifest pwa-icon-192.png; do
+            curl -fsS "http://127.0.0.1:3777/${asset}" > "$asset"
+            test -s "$asset"
+          done
+          echo "ok: dashboard bundles and PWA assets are embedded"
 
           out=$("$bin" upload draft.html --api-url http://127.0.0.1:3777)
           printf '%s\n' "$out"

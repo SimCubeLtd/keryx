@@ -1,6 +1,6 @@
 [package]
 name = "keryx-render"
-description = "Keryx dashboard HTML and PDF rendering."
+description = "Keryx HTML helpers and PDF rendering."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

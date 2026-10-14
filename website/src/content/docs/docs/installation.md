@@ -39,15 +39,19 @@ If an archive for your platform is unavailable, build from source.
 
 ## Build from source
 
-Install Git and [Rust through rustup](https://rustup.rs/), then clone the repository:
+Install Git, [Rust through rustup](https://rustup.rs/) and [Vite Plus](https://viteplus.dev/), then clone the repository:
 
 ```sh
 git clone https://github.com/SimCubeLtd/keryx.git
 cd keryx
+cd frontend
+vp install --frozen-lockfile
+vp run build
+cd ..
 cargo build --release --locked
 ```
 
-The repository pins its Rust nightly in `rust-toolchain.toml`. The resulting executable is `target/release/keryx`, or `target/release/keryx.exe` on Windows. Copy it to a directory on your `PATH`.
+The repository pins its Rust nightly in `rust-toolchain.toml`. The resulting executable is `target/release/keryx`, or `target/release/keryx.exe` on Windows. Copy it to a directory on your `PATH`. The frontend is embedded in this executable; Node.js, pnpm and the frontend build directory are only needed when building from source.
 
 S3 storage and OCI sharing are included by default. A smaller build without those features uses:
 

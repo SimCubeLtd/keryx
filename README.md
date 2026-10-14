@@ -61,12 +61,29 @@ those skills.
 
 ## Development
 
-The repository pins its Rust toolchain in `rust-toolchain.toml`. From the repository root:
+The repository pins its Rust toolchain in `rust-toolchain.toml`. Building the embedded dashboard also requires [Vite Plus](https://viteplus.dev/). Vite Plus uses the pnpm version pinned in `frontend/package.json`. From the repository root:
 
 ```sh
+cd frontend
+vp install --frozen-lockfile
+vp run build
+cd ..
 cargo build --locked
 cargo test --locked
 ```
+
+The release executable embeds the dashboard assets and needs no Node.js runtime
+or frontend directory. Rebuild the frontend before Cargo after changing it.
+The Astro documentation website in `website/` is a separate application.
+
+The dashboard uses Svelte 5, shadcn-svelte components and TanStack Query. Rust
+owns the API and redaction; SSE invalidates browser queries. Regenerate its
+Specta TypeScript bindings with `cd frontend && vp run rust:bindings` after
+changing Rust wire types. The Rust tests reject stale generated bindings.
+
+Run frontend checks with `cd frontend && vp run check && vp test run`.
+See [`tests/dashboard/README.md`](tests/dashboard/README.md) for browser tests
+that use a temporary database, storage directory and isolated server.
 
 See [`supply-chain/README.md`](supply-chain/README.md) for dependency review
 and update rules.

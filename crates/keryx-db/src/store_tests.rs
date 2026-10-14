@@ -1176,3 +1176,179 @@ async fn prune_versions_and_upload_serialize_without_deleting_the_new_upload() {
         Err(error) => panic!("unexpected reset failure: {error}"),
     }
 }
+
+#[tokio::test]
+async fn checked_purge_preserves_newer_versions_and_other_drafts() {
+    let store = SeaOrmStore::open_test().await;
+    let meta = UploadMetadata::default();
+    let first = record(&store, "<p>old</p>", None, &meta).await.unwrap();
+    let second = record(&store, "<p>new</p>", Some(first.draft_id.clone()), &meta)
+        .await
+        .unwrap();
+    let other = record(&store, "<p>unselected</p>", None, &meta)
+        .await
+        .unwrap();
+    assert!(matches!(
+        store
+            .purge_draft_checked(&first.draft_id, Some(&first.version_id))
+            .await
+            .unwrap(),
+        PurgeDraftOutcome::VersionChanged
+    ));
+    assert_eq!(store.list_versions(&first.draft_id).await.unwrap().len(), 2);
+    let outcome = store
+        .purge_draft_checked(&first.draft_id, Some(&second.version_id))
+        .await
+        .unwrap();
+    let PurgeDraftOutcome::Purged(keys) = outcome else {
+        panic!("expected purge")
+    };
+    assert_eq!(keys.len(), 2);
+    assert!(store
+        .get_draft_summary(&first.draft_id)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(store
+        .get_draft_summary(&other.draft_id)
+        .await
+        .unwrap()
+        .is_some());
+    assert!(matches!(
+        store
+            .purge_draft_checked(&first.draft_id, Some(&second.version_id))
+            .await
+            .unwrap(),
+        PurgeDraftOutcome::NotFound
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn checked_purge_and_upload_serialize_without_losing_a_committed_upload() {
+    let store = SeaOrmStore::open_test().await;
+    let meta = UploadMetadata::default();
+    let first = record(&store, "<p>reviewed</p>", None, &meta)
+        .await
+        .unwrap();
+    let upload = new_upload(
+        "<p>concurrent</p>",
+        first.draft_id.clone(),
+        false,
+        new_internal_id(),
+        &meta,
+    );
+    let (purged, uploaded) = tokio::join!(
+        store.purge_draft_checked(&first.draft_id, Some(&first.version_id)),
+        store.record_upload(upload),
+    );
+    match purged.unwrap() {
+        PurgeDraftOutcome::Purged(keys) => {
+            assert_eq!(keys.len(), 1);
+            assert!(matches!(uploaded, Err(UploadError::DraftNotFound)));
+            assert!(store
+                .list_versions(&first.draft_id)
+                .await
+                .unwrap()
+                .is_empty());
+        }
+        PurgeDraftOutcome::VersionChanged => {
+            let uploaded = uploaded.unwrap();
+            let versions = store.list_versions(&first.draft_id).await.unwrap();
+            assert_eq!(versions.len(), 2);
+            assert_eq!(versions[0].id, uploaded.version_id);
+        }
+        PurgeDraftOutcome::NotFound => panic!("the reviewed draft existed"),
+    }
+}
+
+#[tokio::test]
+async fn multi_tag_assignment_validates_before_writing_and_is_additive_and_idempotent() {
+    let store = SeaOrmStore::open_test().await;
+    let meta = UploadMetadata::default();
+    let draft = record(&store, "<p>keep content</p>", None, &meta)
+        .await
+        .unwrap();
+    let before = store
+        .get_draft_summary(&draft.draft_id)
+        .await
+        .unwrap()
+        .unwrap();
+    store.attach_tag(&draft.draft_id, "existing").await.unwrap();
+    let names = vec![
+        " New  Tag ".to_owned(),
+        "new tag".to_owned(),
+        "second".to_owned(),
+    ];
+    let tags = store.attach_tags(&draft.draft_id, &names).await.unwrap();
+    assert_eq!(
+        tags.iter().map(|tag| tag.name.as_str()).collect::<Vec<_>>(),
+        vec!["existing", "new tag", "second"]
+    );
+    assert_eq!(
+        store.attach_tags(&draft.draft_id, &names).await.unwrap(),
+        tags
+    );
+    assert!(store
+        .attach_tags(&draft.draft_id, &["would-create".into(), "bad/tag".into()])
+        .await
+        .is_err());
+    assert!(store.attach_tags(&draft.draft_id, &[]).await.is_err());
+    for index in 3..20 {
+        store
+            .attach_tag(&draft.draft_id, &format!("tag-{index}"))
+            .await
+            .unwrap();
+    }
+    assert!(matches!(
+        store
+            .attach_tags(&draft.draft_id, &["overflow-a".into(), "overflow-b".into()])
+            .await,
+        Err(TagError::Invalid(_))
+    ));
+    let catalogue = store.dashboard_tags().await.unwrap();
+    assert!(!catalogue
+        .catalogue
+        .iter()
+        .any(|tag| tag.name.starts_with("overflow-") || tag.name == "would-create"));
+    assert_eq!(catalogue.assignments[&draft.draft_id].len(), 20);
+    assert_eq!(
+        serde_json::to_value(
+            store
+                .get_draft_summary(&draft.draft_id)
+                .await
+                .unwrap()
+                .unwrap()
+        )
+        .unwrap(),
+        serde_json::to_value(before).unwrap()
+    );
+    assert_eq!(store.list_versions(&draft.draft_id).await.unwrap().len(), 1);
+    assert!(matches!(
+        store.attach_tags("missing", &["new-name".into()]).await,
+        Err(TagError::DraftNotFound)
+    ));
+}
+
+#[tokio::test]
+async fn concurrent_multi_tag_assignment_keeps_the_twenty_tag_limit_atomic() {
+    let store = SeaOrmStore::open_test().await;
+    let draft = record(&store, "<p>tags</p>", None, &UploadMetadata::default())
+        .await
+        .unwrap();
+    let initial: Vec<_> = (0..18).map(|index| format!("tag-{index}")).collect();
+    store.attach_tags(&draft.draft_id, &initial).await.unwrap();
+    let left = vec!["left-a".to_owned(), "left-b".to_owned()];
+    let right = vec!["right-a".to_owned(), "right-b".to_owned()];
+    let (a, b) = tokio::join!(
+        store.attach_tags(&draft.draft_id, &left),
+        store.attach_tags(&draft.draft_id, &right)
+    );
+    assert_ne!(a.is_ok(), b.is_ok());
+    let catalogue = store.dashboard_tags().await.unwrap();
+    assert_eq!(catalogue.assignments[&draft.draft_id].len(), 20);
+    assert_eq!(
+        catalogue.catalogue.len(),
+        20,
+        "failed additions create no orphan tag names"
+    );
+}

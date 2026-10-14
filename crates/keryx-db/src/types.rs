@@ -52,6 +52,14 @@ impl std::fmt::Display for UploadError {
 
 impl std::error::Error for UploadError {}
 
+/// The metadata decision, made while holding the draft's write lock.
+#[derive(Debug)]
+pub enum PurgeDraftOutcome {
+    Purged(Vec<String>),
+    NotFound,
+    VersionChanged,
+}
+
 /// Metadata committed before the caller removes only the pruned blobs.
 #[derive(Debug)]
 pub struct PruneVersionsOutcome {

@@ -31,6 +31,11 @@ url = "https://raw.githubusercontent.com/zcash/rust-ecosystem/main/supply-chain/
 [policy.stylo]
 audit-as-crates-io = true
 
+[[exemptions.Inflector]]
+version = "0.11.4"
+criteria = "safe-to-run"
+notes = "Unreviewed dev-only dependency of Specta type generation, pinned to the version used by MeshForma. Not linked into the release executable."
+
 [[exemptions.accesskit]]
 version = "0.17.1"
 criteria = "safe-to-deploy"
@@ -1546,6 +1551,26 @@ criteria = "safe-to-deploy"
 [[exemptions.smol_str]]
 version = "0.2.2"
 criteria = "safe-to-deploy"
+
+[[exemptions.specta]]
+version = "2.0.0-rc.25"
+criteria = "safe-to-run"
+notes = "Unreviewed dev-only Rust-to-TypeScript generator, pinned to the version used by MeshForma. Not linked into the release executable."
+
+[[exemptions.specta-macros]]
+version = "2.0.0-rc.25"
+criteria = "safe-to-run"
+notes = "Unreviewed dev-only derive macros for Specta bindings, pinned to the version used by MeshForma. Not linked into the release executable."
+
+[[exemptions.specta-serde]]
+version = "0.0.12"
+criteria = "safe-to-run"
+notes = "Unreviewed dev-only Serde wire-format adapter for Specta, pinned to the version used by MeshForma. Not linked into the release executable."
+
+[[exemptions.specta-typescript]]
+version = "0.0.12"
+criteria = "safe-to-run"
+notes = "Unreviewed dev-only TypeScript exporter for Specta, pinned to the version used by MeshForma. Not linked into the release executable."
 
 [[exemptions.spin]]
 version = "0.9.9"
