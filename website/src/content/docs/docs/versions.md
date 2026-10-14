@@ -35,7 +35,7 @@ Use `keryx tui` for a terminal browser and version history. The web dashboard at
 ## Reset and prune version history
 
 Use **Reset and prune version history** beside the dashboard's Version history
-heading or in a draft's context menu. Both open the same confirmation showing
+heading, or **Reset version history…** in a draft's context menu. Both open the same confirmation showing
 how many older versions will be deleted and which version will be kept.
 
 For example, a draft with v1 through v12 keeps v12's content, permanently deletes
@@ -56,6 +56,12 @@ the history and asks you to review the updated confirmation.
 If stored file cleanup fails, the history reset still completes and the
 dashboard reports incomplete cleanup. Run `keryx storage gc` to inspect orphan
 files, then `keryx storage gc --delete` to remove them.
+
+To reset several histories together, choose **Bulk Actions**, select drafts and
+choose **Reset & prune history…**. This keeps the drafts and their latest content;
+it does not prune the drafts from the system. **Delete permanently…** removes
+the selected drafts and every version instead. See [Bulk actions](../dashboard/#bulk-actions)
+for review, confirmation and per-draft results.
 
 ## Provenance
 
