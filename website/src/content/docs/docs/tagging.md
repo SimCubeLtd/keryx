@@ -13,15 +13,29 @@ With `KERYX_API_KEY` set, the dashboard is read-only and hides tags and their co
 
 ## Add and remove tags
 
-1. Select a draft in the dashboard.
-2. In its detail pane, choose **+ Add tag**.
-3. Type to find an existing tag, then select it. To add a new name, choose **Create**.
+1. Select a draft in the dashboard and choose **+ Add tags** in its detail pane, or **Add tags…** in its row menu.
+2. Search for existing tags and select as many as you need. To stage a new name, choose **Create**. You can keep searching and stage more names before saving.
+3. Review the pending tag chips, then choose **Apply** to save all additions together.
 
-The modal closes after the tag is saved. If saving fails, your input and the error stay visible so you can retry. Use the arrow keys to navigate suggestions, Enter to select, or Escape to cancel. Suggestions update after a short typing pause and show at most eight options in a scrollable list. Tags already on the draft are marked **Added**.
+The popover stays open while you select tags. Tags already on the draft are marked **Already assigned** and cannot be selected again. Remove a pending chip to unstage that choice, or use **Clear** to discard all pending choices. Neither removes existing assignments.
+
+**Cancel**, Escape or clicking outside discards pending choices without saving. New tags are created only when you apply. Use arrow keys to navigate suggestions and Enter to toggle the highlighted choice; Enter does not save. Suggestions update after a short typing pause and longer lists scroll.
+
+After a successful save the popover closes. If saving fails, your choices and the error stay visible so you can retry. Live updates preserve the search text and pending choices; if the target draft disappears, the popover closes with a notice.
 
 Remove a tag using the **×** on its chip in the detail pane. This removes only that draft's assignment. The tag remains available to reuse, even when no drafts currently use it.
 
 Names accept ASCII letters, digits, spaces and hyphens, with a maximum of **32 characters**. Keryx lowercases names, trims surrounding spaces and collapses repeated spaces: `Planning` and ` planning ` resolve to the same tag. Each draft can have up to **20 tags**.
+
+## Tag several drafts
+
+Choose **Bulk Actions** beside **Tags**, select drafts, then choose **Add tags…** in the selection bar. The same popover lets you select several existing tags and stage new ones before applying once to the selected drafts.
+
+Tags already on every selected draft are disabled and marked **Already on all**. Partially assigned tags show a count such as **On 2 of 5**; selecting one fills in the missing assignments. Existing tags are always kept. Clear and Cancel discard pending choices; Cancel also preserves the draft selection.
+
+Applying exits bulk mode and shows progress and a result for each draft inside the popover. The confirmed draft list stays fixed while saving. Each draft's additions are atomic: if the whole addition would exceed its 20-tag limit, none of those additions are saved to that draft. Other drafts can still succeed. Bulk tagging does not remove or replace tags.
+
+See [Bulk actions](../dashboard/#bulk-actions) for selection rules, stopping a queue and handling failures.
 
 ## Filter the dashboard
 
@@ -36,12 +50,12 @@ Counts beside tags reflect the current availability tab, repository and text sea
 
 Rows show up to two tags, followed by `+N` for any others. The detail pane shows every tag. Clicking a row's tag applies it as a filter. **Tag A–Z** sorts by each draft's first alphabetical tag, then title; untagged drafts come last.
 
-Filters are retained in the dashboard URL, so you can bookmark or share a filtered view. Live dashboard updates preserve filters and an open Add tag modal.
+Filters are retained in the dashboard URL, so you can bookmark or share a filtered view. Live dashboard updates preserve filters and pending choices in an open tag-assignment popover.
 
 ## Tags stay separate from documents
 
 Tags belong to the draft and survive new uploads, snoozing and disabling. Adding or removing a tag does not change its updated time, version history, content, public links or availability, and sends no notification. Tags do not appear in exported HTML or PDFs.
 
-Pruning a draft hides it from the dashboard; permanently purging it removes its tag assignments. Existing drafts start untagged.
+Resetting and pruning version history keeps tag assignments. Pruning the draft itself hides it from the dashboard; permanently deleting it removes its assignments. Existing drafts start untagged.
 
 See [Versions and links](../versions/) for document revisions and [Availability and notifications](../availability/) for snoozing and access controls.

@@ -1,0 +1,19 @@
+name: Build embedded dashboard
+description: Install hardened frontend dependencies and build assets before Cargo.
+runs:
+  using: composite
+  steps:
+    - uses: pnpm/action-setup@v4
+      with:
+        package_json_file: frontend/package.json
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 24
+        cache: pnpm
+        cache-dependency-path: frontend/pnpm-lock.yaml
+    - shell: bash
+      working-directory: frontend
+      run: pnpm install --frozen-lockfile
+    - shell: bash
+      working-directory: frontend
+      run: pnpm exec vp run build

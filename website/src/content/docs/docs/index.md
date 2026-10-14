@@ -16,6 +16,7 @@ The server, CLI and terminal UI ship in one Rust binary. SQLite stores metadata 
 
 ## Keep the work moving
 
+- [Web dashboard](./dashboard/): find drafts, use row actions and manage several drafts together.
 - [Versions and links](./versions/): revise one draft and link to a specific version.
 - [PDF publishing](./pdf/): turn stored HTML into a paginated A4 document.
 - [Availability](./availability/): snooze a draft, disable access or bring it back.

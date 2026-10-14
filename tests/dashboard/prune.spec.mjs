@@ -1,4 +1,4 @@
-import { test, expect } from '../../website/node_modules/@playwright/test/index.mjs';
+import { test, expect } from '../../frontend/node_modules/@playwright/test/index.mjs';
 
 async function upload(request, draftId, title = 'Reset example') {
   const response = await request.post('/api/uploads', { data: {
@@ -15,8 +15,8 @@ const dialog = page => page.locator('#reset-history-dialog');
 const confirm = page => page.locator('#reset-history-confirm');
 
 async function openMenuAction(page, id) {
-  await draftRow(page, id).locator('.row-menu summary').click();
-  await draftRow(page, id).locator('[data-action="reset-history"]').click();
+  await draftRow(page, id).getByRole('button', { name: /^Actions for/ }).click();
+  await page.getByRole('menu').locator('[data-action="reset-history"]').click();
   await expect(confirm(page)).toBeEnabled();
 }
 
@@ -60,7 +60,7 @@ test('both entry points share confirmation; reset refreshes both dashboards and 
   await expect(page.locator('#detail-version')).toHaveText('v1 · 1 version');
   await expect(page.locator('#detail-title')).toHaveText('Latest content');
   await expect(page.locator('#draft-search')).toHaveValue('Latest');
-  await expect(page.locator('#repo-filter')).toHaveValue('test/prune');
+  await expect(page.locator('#repo-filter')).toHaveText('test/prune');
   expect((await request.get(`/api/drafts/${other.draftId}`)).ok()).toBeTruthy();
   expect((await request.get(`/d/${id}/v/2/raw`)).status()).toBe(404);
   expect(await (await request.get(`/d/${id}/v/1/raw`)).text()).toContain('Latest content');

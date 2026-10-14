@@ -3,6 +3,12 @@
 version = 4
 
 [[package]]
+name = "Inflector"
+version = "0.11.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe438c63458706e03479442743baae6c88256498e6431708f6dfc520a26515d3"
+
+[[package]]
 name = "accesskit"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3160,7 +3166,7 @@ dependencies = [
 
 [[package]]
 name = "keryx"
-version = "0.8.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3185,7 +3191,7 @@ dependencies = [
 
 [[package]]
 name = "keryx-client"
-version = "0.8.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "dirs",
@@ -3201,7 +3207,7 @@ dependencies = [
 
 [[package]]
 name = "keryx-config"
-version = "0.8.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "config",
@@ -3213,7 +3219,7 @@ dependencies = [
 
 [[package]]
 name = "keryx-core"
-version = "0.8.0"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "hex",
@@ -3221,11 +3227,14 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "specta",
+ "specta-serde",
+ "specta-typescript",
 ]
 
 [[package]]
 name = "keryx-db"
-version = "0.8.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3240,7 +3249,7 @@ dependencies = [
 
 [[package]]
 name = "keryx-policy"
-version = "0.8.0"
+version = "1.0.0"
 dependencies = [
  "scraper",
  "serde",
@@ -3249,7 +3258,7 @@ dependencies = [
 
 [[package]]
 name = "keryx-render"
-version = "0.8.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3264,7 +3273,7 @@ dependencies = [
 
 [[package]]
 name = "keryx-server"
-version = "0.8.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3292,7 +3301,7 @@ dependencies = [
 
 [[package]]
 name = "keryx-share"
-version = "0.8.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "docker_credential",
@@ -3307,7 +3316,7 @@ dependencies = [
 
 [[package]]
 name = "keryx-store"
-version = "0.8.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5294,9 +5303,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.43"
+version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
+checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "once_cell",
  "ring",
@@ -6009,6 +6018,47 @@ checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "specta"
+version = "2.0.0-rc.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "38f9a30cbcbb7011f1da7d73483983bf838af123883e45f2b36ed76328df9c50"
+dependencies = [
+ "rustc_version",
+ "specta-macros",
+]
+
+[[package]]
+name = "specta-macros"
+version = "2.0.0-rc.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ce14957ecc2897f1f848b8255b6531d13ddf49cbcf506b7c2c9fb1d005593bb"
+dependencies = [
+ "Inflector",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "specta-serde"
+version = "0.0.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ee8a72b755ddb8949fd8f17c5db43f0e8a806ea587d9bc602ee3f73240c00029"
+dependencies = [
+ "specta",
+ "specta-macros",
+]
+
+[[package]]
+name = "specta-typescript"
+version = "0.0.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "639404ee95557f2f8b7e4cb773ffefd45304c7ab8ba21ac83b69051595e083c0"
+dependencies = [
+ "specta",
 ]
 
 [[package]]

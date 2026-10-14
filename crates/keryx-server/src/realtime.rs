@@ -1,6 +1,6 @@
 //! Coalesced dashboard invalidation for connected browsers.
 //!
-//! The channel carries only a revision. Browsers fetch a fresh server-rendered
+//! The channel carries only a revision. Browsers fetch a fresh JSON
 //! snapshot after each change, so skipped intermediate revisions never leave a
 //! dashboard stale.
 

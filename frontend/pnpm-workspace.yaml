@@ -1,0 +1,21 @@
+packages:
+  - '.'
+# Same five-day cooldown and source restrictions as MeshForma.
+minimumReleaseAge: 7200
+blockExoticSubdeps: true
+allowBuilds:
+  esbuild: true
+overrides:
+  vite@*: 'catalog:'
+  vitest@*: 'catalog:'
+catalog:
+  vite: npm:@voidzero-dev/vite-plus-core@0.3.0
+  vitest: 4.1.11
+  vite-plus: 0.3.0
+peerDependencyRules:
+  allowAny:
+    - vite
+    - vitest
+  allowedVersions:
+    vite: '*'
+    vitest: '*'

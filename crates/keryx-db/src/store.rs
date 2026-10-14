@@ -30,8 +30,8 @@ use crate::entity::{
 };
 use crate::types::{
     canonical_tag_name, normalize_wake_time, AvailabilityError, BlobRecord, DashboardTags,
-    NewUpload, PendingDelivery, PruneVersionsError, PruneVersionsOutcome, ServedVersion, TagError,
-    UploadError, UploadOutcome, DEFAULT_DISABLE_REASON,
+    NewUpload, PendingDelivery, PruneVersionsError, PruneVersionsOutcome, PurgeDraftOutcome,
+    ServedVersion, TagError, UploadError, UploadOutcome, DEFAULT_DISABLE_REASON,
 };
 
 /// Draft and version metadata, availability, and the notification outbox.
@@ -40,7 +40,11 @@ pub trait DraftStore: Send + Sync {
     /// Load the catalogue and all live draft assignments without version joins.
     async fn dashboard_tags(&self) -> Result<DashboardTags>;
     /// Create-or-find and attach atomically. Writes only organisation metadata.
-    async fn attach_tag(&self, draft_id: &str, name: &str) -> Result<Vec<Tag>, TagError>;
+    async fn attach_tag(&self, draft_id: &str, name: &str) -> Result<Vec<Tag>, TagError> {
+        self.attach_tags(draft_id, &[name.to_owned()]).await
+    }
+    /// Validate and attach the entire addition under one draft lock, preserving existing tags.
+    async fn attach_tags(&self, draft_id: &str, names: &[String]) -> Result<Vec<Tag>, TagError>;
     /// Remove one assignment; repeated removal is a successful no-op.
     async fn detach_tag(&self, draft_id: &str, tag_id: &str) -> Result<Vec<Tag>, TagError>;
 
@@ -90,7 +94,21 @@ pub trait DraftStore: Send + Sync {
     /// Hard delete. Answers the removed versions' object keys so the caller
     /// can delete the blobs, or None when the draft id does not exist at all.
     /// Soft-deleted drafts can be purged; that is the point.
-    async fn purge_draft(&self, draft_id: &str) -> Result<Option<Vec<String>>>;
+    async fn purge_draft(&self, draft_id: &str) -> Result<Option<Vec<String>>> {
+        match self.purge_draft_checked(draft_id, None).await? {
+            PurgeDraftOutcome::Purged(keys) => Ok(Some(keys)),
+            PurgeDraftOutcome::NotFound => Ok(None),
+            PurgeDraftOutcome::VersionChanged => {
+                anyhow::bail!("Unexpected version check without a precondition")
+            }
+        }
+    }
+    /// Check the reviewed version and delete under the same write lock as uploads.
+    async fn purge_draft_checked(
+        &self,
+        draft_id: &str,
+        expected_current_version_id: Option<&str>,
+    ) -> Result<PurgeDraftOutcome>;
     /// Delete older versions and renumber the current one to v1 atomically.
     /// Reject a stale confirmation; retain the current internal ID and blob.
     async fn prune_versions(
@@ -528,49 +546,60 @@ impl DraftStore for SeaOrmStore {
         })
     }
 
-    async fn attach_tag(&self, draft_id: &str, name: &str) -> Result<Vec<Tag>, TagError> {
-        let name = canonical_tag_name(name)?;
+    async fn attach_tags(&self, draft_id: &str, names: &[String]) -> Result<Vec<Tag>, TagError> {
+        let names = names
+            .iter()
+            .map(|name| canonical_tag_name(name))
+            .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
+        if names.is_empty() {
+            return Err(TagError::Invalid("Choose at least one tag.".into()));
+        }
         let tx = self.begin_write().await?;
         self.lock_tag_draft(&tx, draft_id).await?;
         let current = assigned_tags(&tx, draft_id).await?;
-        if current.iter().any(|tag| tag.name == name) {
-            tx.commit().await?;
-            return Ok(current);
-        }
-        if current.len() >= 20 {
+        let additions: Vec<_> = names
+            .into_iter()
+            .filter(|name| !current.iter().any(|tag| &tag.name == name))
+            .collect();
+        if current.len() + additions.len() > 20 {
             return Err(TagError::Invalid(
                 "A draft can have at most 20 tags.".into(),
             ));
         }
-        tag::Entity::insert(tag::ActiveModel {
-            id: Set(new_internal_id()),
-            name: Set(name.clone()),
-        })
-        .on_conflict(
-            OnConflict::column(tag::Column::Name)
-                .do_nothing()
-                .to_owned(),
-        )
-        .try_insert()
-        .exec(&tx)
-        .await?;
-        let tag = tag::Entity::find()
-            .filter(tag::Column::Name.eq(name))
-            .one(&tx)
-            .await?
-            .ok_or_else(|| sea_orm::DbErr::RecordNotFound("Tag insert returned no tag".into()))?;
-        draft_tag::Entity::insert(draft_tag::ActiveModel {
-            draft_id: Set(draft_id.into()),
-            tag_id: Set(tag.id),
-        })
-        .on_conflict(
-            OnConflict::columns([draft_tag::Column::DraftId, draft_tag::Column::TagId])
-                .do_nothing()
-                .to_owned(),
-        )
-        .try_insert()
-        .exec(&tx)
-        .await?;
+        // Stable name order also avoids taking catalogue locks in conflicting orders.
+        for name in additions {
+            tag::Entity::insert(tag::ActiveModel {
+                id: Set(new_internal_id()),
+                name: Set(name.clone()),
+            })
+            .on_conflict(
+                OnConflict::column(tag::Column::Name)
+                    .do_nothing()
+                    .to_owned(),
+            )
+            .try_insert()
+            .exec(&tx)
+            .await?;
+            let tag = tag::Entity::find()
+                .filter(tag::Column::Name.eq(name))
+                .one(&tx)
+                .await?
+                .ok_or_else(|| {
+                    sea_orm::DbErr::RecordNotFound("Tag insert returned no tag".into())
+                })?;
+            draft_tag::Entity::insert(draft_tag::ActiveModel {
+                draft_id: Set(draft_id.into()),
+                tag_id: Set(tag.id),
+            })
+            .on_conflict(
+                OnConflict::columns([draft_tag::Column::DraftId, draft_tag::Column::TagId])
+                    .do_nothing()
+                    .to_owned(),
+            )
+            .try_insert()
+            .exec(&tx)
+            .await?;
+        }
         let tags = assigned_tags(&tx, draft_id).await?;
         tx.commit().await?;
         Ok(tags)
@@ -846,14 +875,23 @@ impl DraftStore for SeaOrmStore {
         Ok(changed.rows_affected > 0)
     }
 
-    async fn purge_draft(&self, draft_id: &str) -> Result<Option<Vec<String>>> {
+    async fn purge_draft_checked(
+        &self,
+        draft_id: &str,
+        expected_current_version_id: Option<&str>,
+    ) -> Result<PurgeDraftOutcome> {
         let tx = self.begin_write().await?;
-        if draft::Entity::find_by_id(draft_id)
-            .one(&tx)
-            .await?
-            .is_none()
+        let mut query = draft::Entity::find_by_id(draft_id);
+        if tx.get_database_backend() == DbBackend::Postgres {
+            query = query.lock_exclusive();
+        }
+        let Some(current) = query.one(&tx).await? else {
+            return Ok(PurgeDraftOutcome::NotFound);
+        };
+        if expected_current_version_id
+            .is_some_and(|expected| current.current_version_id.as_deref() != Some(expected))
         {
-            return Ok(None);
+            return Ok(PurgeDraftOutcome::VersionChanged);
         }
         let keys: Vec<String> = draft_version::Entity::find()
             .select_only()
@@ -868,7 +906,7 @@ impl DraftStore for SeaOrmStore {
             .await?;
         draft::Entity::delete_by_id(draft_id).exec(&tx).await?;
         tx.commit().await?;
-        Ok(Some(keys))
+        Ok(PurgeDraftOutcome::Purged(keys))
     }
 
     async fn prune_versions(

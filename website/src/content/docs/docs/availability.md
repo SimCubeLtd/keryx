@@ -28,16 +28,18 @@ state from those two fields and the current time.
 
 The dashboard opens on Active. `/?draft=<id>&view=snoozed` deep-links to a tab
 and draft. The selected pane offers Snooze (with presets or a custom wake
-time), Unsnooze, Disable, or Enable; with an API key set those controls are
-absent and the authenticated CLI is the management path.
+time), Unsnooze, Disable, or Enable. The row's **…** menu offers the same
+actions. With an API key set those controls are absent and the authenticated
+CLI is the management path.
 
 While the dashboard is open, a Server-Sent Events connection reports that its
-current view may be stale. The browser then fetches one server-rendered
-snapshot and reconciles the rows, counts, selected draft, version history, and
-repository filter without reloading the page. The event carries no draft data.
+current view may be stale. The browser then fetches a JSON
+snapshot and updates the rows, counts, selected draft, version history, and
+repository filter without reloading the page. Filters and pending tag choices
+are preserved. The event carries no draft data.
 A reconnect immediately receives the latest revision, so changes made while
 the connection was down are recovered. Protected deployments use the same
-redacted rendering path as the initial dashboard response.
+redacted snapshot endpoint; private provenance and tags are omitted.
 
 ## Installable app and notifications
 

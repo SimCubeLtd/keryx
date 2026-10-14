@@ -33,6 +33,12 @@ jobs:
           rustup show active-toolchain
       - uses: Swatinem/rust-cache@v2
 
+      - uses: ./.github/actions/frontend
+
+      - name: Dashboard checks
+        working-directory: frontend
+        run: pnpm exec vp run check && pnpm exec vp test run
+
       - name: cargo fmt
         run: cargo fmt --all -- --check
       - name: cargo clippy
@@ -41,6 +47,12 @@ jobs:
         run: cargo build --all-targets
       - name: cargo test
         run: cargo test
+      - name: Install browser
+        working-directory: frontend
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Dashboard browser tests
+        working-directory: frontend
+        run: pnpm exec vp run test:browser
 
   postgres:
     name: Store suite on Postgres
@@ -72,6 +84,7 @@ jobs:
       # keryx-db holds the store suite, including concurrent uploads to one
       # draft and concurrent migrators; keryx-server drives the same store
       # through every handler.
+      - uses: ./.github/actions/frontend
       - name: cargo test (Postgres)
         run: cargo test -p keryx-db -p keryx-server
 

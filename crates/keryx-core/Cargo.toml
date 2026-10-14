@@ -15,4 +15,7 @@ serde.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]
+specta.workspace = true
+specta-serde.workspace = true
+specta-typescript.workspace = true
 serde_json.workspace = true
