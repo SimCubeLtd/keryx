@@ -8,9 +8,6 @@ ignore = [
   # chacha20 0.10.2 is the first non-yanked compatible release, but it is
   # deliberately blocked until it clears the repository's 14-day age gate.
   { crate = "chacha20@0.10.1", reason = "replace with 0.10.2 once it is at least 14 days old" },
-  # rustls 0.23.45 fixes this, but it was published on 2026-09-14 and is
-  # deliberately blocked until it clears the repository's 14-day age gate.
-  { id = "RUSTSEC-2026-0285", reason = "remove and run `cargo update -p rustls` once 0.23.45 is at least 14 days old (2026-09-28)" }
 ]
 
 [licenses]
