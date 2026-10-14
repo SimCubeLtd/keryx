@@ -1384,6 +1384,11 @@ criteria = "safe-to-deploy"
 version = "0.23.43"
 criteria = "safe-to-deploy"
 
+[[exemptions.rustls]]
+version = "0.23.46"
+criteria = "safe-to-deploy"
+notes = "Unreviewed security update from the previously exempted 0.23.43. Fixes RUSTSEC-2026-0346, RUSTSEC-2026-0348 and RUSTSEC-2026-0349; Prom approved a one-time release-age exception on 2026-10-14."
+
 [[exemptions.rustls-native-certs]]
 version = "0.8.4"
 criteria = "safe-to-deploy"
