@@ -233,8 +233,17 @@ a {
   color: var(--blue-strong);
 }
 .notify-panel {
-  top: 36px;
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 40;
   width: 272px;
+  max-width: calc(100vw - 24px);
+  padding: 6px;
+  background: var(--surface-raised);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  box-shadow: 0 12px 32px #0002;
 }
 .notify-state {
   padding: 8px 9px 6px;
@@ -1388,6 +1397,12 @@ dialog::backdrop {
   }
 }
 @media (max-width: 680px) {
+  .notify-menu {
+    position: static;
+  }
+  .notify-panel {
+    right: 12px;
+  }
   .topbar {
     padding: 0 14px;
   }

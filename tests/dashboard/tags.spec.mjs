@@ -245,3 +245,17 @@ test('tag sorting, row chips, failed removal and keyboard focus survive refresh'
   await page.keyboard.press('Escape');
   await expect(page.locator('#add-tag')).toBeFocused();
 });
+
+
+test('repeated URL tags preserve unique order and respect untagged mode', async ({ page, request }) => {
+  const { planning, review } = await seed(request);
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.goto(`/?tag=${planning.id}&tag=${planning.id}&tag=${review.id}&tag=${planning.id}`);
+  await expect(page.locator('#tag-selections [aria-label^="Clear filter"]')).toHaveText(['planning ×', 'review ×']);
+  expect(new URL(page.url()).searchParams.getAll('tag')).toEqual([planning.id, review.id]);
+  expect(errors).toEqual([]);
+  await page.goto(`/?tag=${planning.id}&tag=${planning.id}&untagged=1`);
+  await expect(page.locator('#tag-selections')).toContainText('Untagged');
+  await expect(page.locator('#tag-selections [aria-label^="Clear filter"]')).toHaveCount(0);
+});

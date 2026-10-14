@@ -1,6 +1,10 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
-  import type { NotificationKind, PushSubscriptionInput } from '$lib/generated/bindings'
+  import type {
+    NotificationKind,
+    PushSubscriptionInput,
+    PushSubscriptionSummary,
+  } from '$lib/generated/bindings'
   import { errorMessage, request } from '$lib/api'
   import { Button } from './ui/button'
   let {
@@ -15,6 +19,10 @@
   let supported = $state(false),
     busy = $state(false),
     subscription = $state<PushSubscription | null>(null)
+  let pendingSubscription = $state<PushSubscription | null>(null)
+  let restorePending = true
+  let registrationError = $state('')
+  let savedEvents: NotificationKind[] = []
   let permission = $state<NotificationPermission>('default')
   let events = $state<NotificationKind[]>(['published', 'revised', 'woke', 'enabled', 'disabled'])
   const labels: Record<NotificationKind, string> = {
@@ -30,17 +38,24 @@
     )
     return Uint8Array.from(raw, (char) => char.charCodeAt(0))
   }
-  async function save(current: PushSubscription) {
+  async function save(current: PushSubscription, restore = false) {
     const payload = current.toJSON()
     if (!payload.keys?.p256dh || !payload.keys.auth)
       throw new Error('Push subscription keys are unavailable.')
     const body: PushSubscriptionInput = {
       endpoint: current.endpoint,
       keys: { p256dh: payload.keys.p256dh, auth: payload.keys.auth },
-      events,
+      events: restore ? undefined : events,
     }
-    await request('/api/push/subscriptions', { method: 'PUT', body: JSON.stringify(body) })
+    const response = await request<{ subscription: PushSubscriptionSummary }>(
+      '/api/push/subscriptions',
+      { method: 'PUT', body: JSON.stringify(body) },
+    )
+    events = response.subscription.events
+    savedEvents = [...events]
     subscription = current
+    pendingSubscription = null
+    registrationError = ''
   }
   onMount(() => {
     let active = true
@@ -52,8 +67,18 @@
             const current = await registration.pushManager.getSubscription()
             if (active) {
               supported = true
-              subscription = current
               permission = Notification.permission
+              if (current) {
+                pendingSubscription = current
+                busy = true
+                try {
+                  await save(current, true)
+                } catch (cause) {
+                  if (active) registrationError = errorMessage(cause)
+                } finally {
+                  if (active) busy = false
+                }
+              }
             }
           }
         })
@@ -90,6 +115,11 @@
   async function enable() {
     busy = true
     try {
+      if (pendingSubscription) {
+        await save(pendingSubscription, restorePending)
+        toast('Notifications enabled on this device.')
+        return
+      }
       permission = await Notification.requestPermission()
       if (permission !== 'granted') return
       const { publicKey } = await request<{ publicKey: string }>('/api/push/vapid')
@@ -98,9 +128,12 @@
         userVisibleOnly: true,
         applicationServerKey: bytes(publicKey),
       })
+      pendingSubscription = current
+      restorePending = false
       await save(current)
       toast('Notifications enabled on this device.')
     } catch (cause) {
+      if (pendingSubscription) registrationError = errorMessage(cause)
       toast(errorMessage(cause), true)
     } finally {
       busy = false
@@ -130,6 +163,7 @@
     try {
       await save(subscription)
     } catch (cause) {
+      events = [...savedEvents]
       toast(errorMessage(cause), true)
     } finally {
       busy = false
@@ -144,11 +178,13 @@
     >
     <div class="menu notify-panel">
       <div class="notify-state" id="notify-state">
-        {subscription
-          ? 'This device receives the selected draft events.'
-          : permission === 'denied'
-            ? 'Notifications are blocked in this browser. Change its site permissions to enable them.'
-            : 'Enable notifications for this device.'}
+        {registrationError
+          ? `Registration failed: ${registrationError}. Retry to enable notifications.`
+          : subscription
+            ? 'This device receives the selected draft events.'
+            : permission === 'denied'
+              ? 'Notifications are blocked in this browser. Change its site permissions to enable them.'
+              : 'Enable notifications for this device.'}
       </div>
       <div class="menu-group">
         {#each Object.entries(labels) as [kind, label] (kind)}<label class="notify-option"
@@ -156,7 +192,7 @@
               type="checkbox"
               value={kind}
               bind:group={events}
-              disabled={busy}
+              disabled={busy || !!pendingSubscription}
               onchange={async () => {
                 await tick()
                 await preferences()
@@ -170,7 +206,8 @@
           id="notify-enable"
           disabled={busy || permission === 'denied'}
           hidden={!!subscription}
-          onclick={enable}>Enable on this device</Button
+          onclick={enable}
+          >{pendingSubscription ? 'Retry registration' : 'Enable on this device'}</Button
         ><Button
           variant="outline"
           id="notify-disable"

@@ -6,6 +6,30 @@ async function upload(request, title, metadata) {
   return (await response.json()).draftId;
 }
 
+async function mockPush(page, existing = false) {
+  await page.addInitScript(existing => {
+    let current = null;
+    window.pushSubscribeCalls = 0;
+    const subscription = {
+      endpoint: 'https://push.example.test/subscription',
+      toJSON: () => ({ keys: { p256dh: 'test-key', auth: 'test-auth' } }),
+      unsubscribe: async () => { current = null; sessionStorage.removeItem('test-push'); return true; },
+    };
+    if (existing || sessionStorage.getItem('test-push')) current = subscription;
+    const registration = { pushManager: {
+      getSubscription: async () => current,
+      subscribe: async () => { window.pushSubscribeCalls++; current = subscription; sessionStorage.setItem('test-push', 'yes'); return subscription; },
+    } };
+    Object.defineProperty(navigator.serviceWorker, 'register', { value: async () => registration });
+    Object.defineProperty(navigator.serviceWorker, 'ready', { get: () => Promise.resolve(registration) });
+    Object.defineProperty(window, 'Notification', { value: class {
+      static permission = 'default';
+      static async requestPermission() { this.permission = 'granted'; return 'granted'; }
+    } });
+    if (!('PushManager' in window)) Object.defineProperty(window, 'PushManager', { value: class {} });
+  }, existing);
+}
+
 test.beforeEach(async ({ request }) => {
   for (const draft of (await (await request.get('/api/drafts')).json()).drafts) {
     await request.delete(`/api/drafts/${draft.draftId}?purge=true`);
@@ -57,7 +81,12 @@ test('availability controls and client-side snooze expiry work with live snapsho
   await request.put(`/api/drafts/${id}/availability`, { data: { state: 'snoozed', until: new Date(Date.now() + 60000).toISOString() } });
   await page.getByRole('tab', { name: /Snoozed/ }).click();
   await expect(page.locator('#detail-title')).toHaveText('Availability example');
-  await page.clock.runFor(61000);
+  await page.clock.runFor(30000);
+  const snapshot = page.waitForResponse('**/api/dashboard/snapshot*');
+  await upload(request, 'Unrelated live update');
+  await snapshot;
+  await expect(page.locator('[data-count=active]')).toHaveText('1');
+  await page.clock.runFor(31000);
   await expect(page.locator('.draft-row:visible')).toHaveCount(0);
   await page.getByRole('tab', { name: /Active/ }).click();
   await expect(page.locator('#detail-title')).toHaveText('Availability example');
@@ -77,33 +106,25 @@ test('the existing PWA worker registers at root scope and controls the dashboard
 });
 
 test('push controls send current event preferences and unsubscribe without contacting a push service', async ({ page }) => {
-  await page.addInitScript(() => {
-    let current = null;
-    const subscription = {
-      endpoint: 'https://push.example.test/subscription',
-      toJSON: () => ({ keys: { p256dh: 'test-key', auth: 'test-auth' } }),
-      unsubscribe: async () => { current = null; return true; },
-    };
-    const registration = { pushManager: {
-      getSubscription: async () => current,
-      subscribe: async () => { current = subscription; return subscription; },
-    } };
-    Object.defineProperty(navigator.serviceWorker, 'register', { value: async () => registration });
-    Object.defineProperty(navigator.serviceWorker, 'ready', { get: () => Promise.resolve(registration) });
-    Object.defineProperty(window, 'Notification', { value: class {
-      static permission = 'default';
-      static async requestPermission() { this.permission = 'granted'; return 'granted'; }
-    } });
-    if (!('PushManager' in window)) Object.defineProperty(window, 'PushManager', { value: class {} });
-  });
+  await mockPush(page);
   const writes = [];
   await page.route('**/api/push/vapid', route => route.fulfill({ json: { publicKey: 'AQID' } }));
   await page.route('**/api/push/subscriptions', route => {
     writes.push({ method: route.request().method(), body: route.request().postDataJSON() });
-    return route.fulfill({ json: { ok: true } });
+    return route.fulfill({ json: { ok: true, subscription: { events: route.request().postDataJSON().events } } });
   });
   await page.goto('/');
+  const header = await page.locator('.topbar').boundingBox();
   await page.locator('#notify-summary').click();
+  expect((await page.locator('.topbar').boundingBox()).height).toBe(header.height);
+  for (const width of [1280, 390, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    const panel = await page.locator('.notify-panel').boundingBox();
+    expect(panel.x).toBeGreaterThanOrEqual(0);
+    expect(panel.x + panel.width).toBeLessThanOrEqual(width);
+    expect(await page.locator('.notify-panel').evaluate(el => getComputedStyle(el).position)).toBe('absolute');
+  }
+  await page.setViewportSize({ width: 1280, height: 720 });
   await page.locator('#notify-enable').click();
   await expect(page.locator('#notify-summary')).toHaveText('Notifications on');
   expect(writes[0].body.events).toEqual(['published', 'revised', 'woke', 'enabled', 'disabled']);
@@ -250,4 +271,63 @@ test('row actions manage the clicked draft, preserve confirmations and follow av
   await expect(menu).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(trigger).toBeFocused();
+});
+
+for (const saved of [['woke'], []]) test(`push preferences restore ${saved.length ? 'a saved subset' : 'an empty selection'} before edits and survive reload`, async ({ page }) => {
+  await mockPush(page, true);
+  let stored = [...saved];
+  const writes = [];
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  await page.route('**/api/push/subscriptions', async route => {
+    const body = route.request().postDataJSON();
+    writes.push(body);
+    if (writes.length === 1) await gate;
+    if (body.events !== undefined) stored = body.events;
+    await route.fulfill({ json: { ok: true, subscription: { events: stored } } });
+  });
+  await page.goto('/');
+  await page.locator('#notify-summary').click();
+  await expect(page.locator('[data-event="published"]')).toBeDisabled();
+  await expect(page.locator('#notify-summary')).toHaveText('Notifications off');
+  expect(writes[0].events).toBeUndefined();
+  release();
+  await expect(page.locator('#notify-summary')).toHaveText('Notifications on');
+  await expect(page.locator('[data-event="published"]')).not.toBeChecked();
+  await expect(page.locator('[data-event="woke"]')).toBeChecked({ checked: saved.includes('woke') });
+  await page.locator('[data-event="revised"]').check();
+  await expect.poll(() => stored.toSorted()).toEqual([...saved, 'revised'].toSorted());
+  await page.reload();
+  await expect(page.locator('#notify-summary')).toHaveText('Notifications on');
+  await page.locator('#notify-summary').click();
+  await expect(page.locator('[data-event="revised"]')).toBeChecked();
+  await expect(page.locator('[data-event="published"]')).not.toBeChecked();
+  expect(writes.at(-1).events).toBeUndefined();
+  expect(await page.evaluate(() => window.pushSubscribeCalls)).toBe(0);
+});
+
+test('failed server registration stays off and retries the existing browser subscription with the chosen events', async ({ page }) => {
+  await mockPush(page);
+  let calls = 0;
+  await page.route('**/api/push/vapid', route => route.fulfill({ json: { publicKey: 'AQID' } }));
+  await page.route('**/api/push/subscriptions', route => {
+    calls++;
+    if (calls === 1 || calls === 3) return route.fulfill({ status: 502, contentType: 'text/html', body: 'Proxy failure' });
+    return route.fulfill({ json: { ok: true, subscription: { events: route.request().postDataJSON().events } } });
+  });
+  await page.goto('/');
+  await page.locator('#notify-summary').click();
+  await page.locator('[data-event="revised"]').uncheck();
+  await page.locator('#notify-enable').click();
+  await expect(page.locator('#notify-summary')).toHaveText('Notifications off');
+  await expect(page.locator('#notify-state')).toContainText('Registration failed');
+  await expect(page.locator('#notify-enable')).toHaveText('Retry registration');
+  await expect(page.locator('[data-event="published"]')).toBeDisabled();
+  await page.locator('#notify-enable').click();
+  await expect(page.locator('#notify-summary')).toHaveText('Notifications on');
+  await expect(page.locator('[data-event="revised"]')).not.toBeChecked();
+  expect(await page.evaluate(() => window.pushSubscribeCalls)).toBe(1);
+  await page.locator('[data-event="enabled"]').uncheck();
+  await expect(page.locator('#toast')).toContainText('HTTP 502');
+  await expect(page.locator('[data-event="enabled"]')).toBeChecked();
 });

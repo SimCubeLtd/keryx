@@ -25,15 +25,15 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ...init?.headers,
     },
   })
-  const body: unknown = await response.json()
   if (!response.ok) {
+    const body: unknown = await response.json().catch(() => null)
     const message =
       typeof body === 'object' && body !== null && 'error' in body && typeof body.error === 'string'
         ? body.error
         : `Request failed with HTTP ${response.status}`
     throw new ApiError(message, response.status)
   }
-  return body as T
+  return (await response.json()) as T
 }
 export const dashboardKey = ['dashboard'] as const
 export const historyKey = (id: string) => ['history', id] as const

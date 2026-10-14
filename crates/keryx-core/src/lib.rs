@@ -34,7 +34,8 @@ mod bindings {
             .register::<crate::types::TagAssignmentRequest>()
             .register::<crate::types::TagAssignmentResponse>()
             .register::<crate::types::AvailabilityUpdate>()
-            .register::<crate::types::PushSubscriptionInput>();
+            .register::<crate::types::PushSubscriptionInput>()
+            .register::<crate::types::PushSubscriptionSummary>();
         specta_typescript::Typescript::default()
             .header("// Generated from Keryx Rust types by `vp run rust:bindings`. Do not edit.\n")
             .export(&types, specta_serde::PhasesFormat)
@@ -49,7 +50,10 @@ mod bindings {
     #[test]
     #[ignore = "writes generated frontend bindings; run vp run rust:bindings"]
     fn export_bindings() {
-        std::fs::write(path(), typescript()).expect("write frontend bindings");
+        let generated = typescript();
+        if std::fs::read_to_string(path()).ok().as_deref() != Some(generated.as_str()) {
+            std::fs::write(path(), generated).expect("write frontend bindings");
+        }
     }
 
     #[test]

@@ -267,6 +267,7 @@ pub struct PushKeys {
     pub auth: String,
 }
 
+#[cfg_attr(test, derive(specta::Type))]
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PushSubscriptionSummary {

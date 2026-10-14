@@ -57,7 +57,9 @@
   let search = $state(params.get('search') ?? ''),
     repo = $state(params.get('repo') ?? '')
   let untagged = $state(params.get('untagged') === '1')
-  let selectedTags = $state<string[]>(params.get('untagged') === '1' ? [] : params.getAll('tag'))
+  let selectedTags = $state<string[]>(
+    params.get('untagged') === '1' ? [] : [...new Set(params.getAll('tag'))],
+  )
   let tagSearch = $state(''),
     tagMenuOpen = $state(false)
   let theme = $state(document.documentElement.dataset.theme ?? 'system')
@@ -198,7 +200,7 @@
         if (woke.length === 1) toast(`${woke[0]?.title} woke and is active again.`)
         else if (woke.length > 1) toast(`${woke.length} drafts woke and are active again.`)
       },
-      Math.min(Math.max(nextWake - now, 0) + 100, 86400000),
+      Math.min(Math.max(nextWake - Date.now(), 0) + 100, 86400000),
     )
     return () => clearTimeout(timer)
   })

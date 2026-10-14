@@ -148,6 +148,13 @@ export type PushSubscriptionInput = {
 	events?: NotificationKind[] | null,
 };
 
+export type PushSubscriptionSummary = {
+	id: string,
+	endpoint: string,
+	events: NotificationKind[],
+	updatedAt: string,
+};
+
 /**  Shared dashboard organisation metadata, independent of document summaries. */
 export type Tag = {
 	id: string,
