@@ -18,6 +18,8 @@ test('the standalone executable serves the app assets and never turns missing ro
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(`/?draft=${id}`);
   await expect(page.locator('#detail-title')).toHaveText('Embedded application');
+  const snapshot = await (await request.get('/api/dashboard/snapshot')).json();
+  await expect(page.locator('.brand .app-version')).toHaveText(`v${snapshot.version}`);
   const source = await (await request.get('/')).text();
   const script = source.match(/src="(\/assets\/[^\"]+\.js)"/);
   expect(script).not.toBeNull();

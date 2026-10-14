@@ -40,6 +40,7 @@ export type DashboardSnapshot = DashboardSnapshot_Serialize | DashboardSnapshot_
 /**  Public dashboard data. Protected metadata is removed before constructing this response. */
 export type DashboardSnapshot_Deserialize = {
 	ok: boolean,
+	version: string,
 	managementEnabled: boolean,
 	drafts: DashboardDraft[],
 	tags: Tag[] | null,
@@ -48,6 +49,7 @@ export type DashboardSnapshot_Deserialize = {
 /**  Public dashboard data. Protected metadata is removed before constructing this response. */
 export type DashboardSnapshot_Serialize = {
 	ok: boolean,
+	version: string,
 	managementEnabled: boolean,
 	drafts: DashboardDraft[],
 	tags?: Tag[] | null,

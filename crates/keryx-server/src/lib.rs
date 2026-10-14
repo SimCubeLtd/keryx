@@ -589,6 +589,7 @@ async fn dashboard_snapshot(State(state): State<SharedState>, headers: HeaderMap
     }
     Json(DashboardSnapshot {
         ok: true,
+        version: env!("CARGO_PKG_VERSION").to_owned(),
         management_enabled,
         drafts,
         tags: management_enabled.then_some(tags.catalogue),
@@ -1767,6 +1768,7 @@ mod tests {
         assert_eq!(snapshot.status(), StatusCode::OK);
         let body = json_body(snapshot).await;
         assert_eq!(body["managementEnabled"], false);
+        assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(body["drafts"].as_array().unwrap().len(), 1);
         let snapshot = body.to_string();
         assert!(!snapshot.contains("SimCubeLtd"));

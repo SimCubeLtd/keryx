@@ -338,6 +338,9 @@
 <header class="topbar">
   <div class="brand">
     <span class="brand-mark"><img src={logo} alt="" width="25" height="25" /></span>Keryx
+    {#if query.data}<span class="app-version" aria-label={`Version ${query.data.version}`}
+        >v{query.data.version}</span
+      >{/if}
   </div>
   <div class="topbar-tools">
     {#if query.data && !management}<span class="management-mode"

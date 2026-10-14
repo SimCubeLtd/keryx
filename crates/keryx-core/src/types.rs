@@ -405,6 +405,7 @@ pub struct DashboardDraft {
 #[serde(rename_all = "camelCase")]
 pub struct DashboardSnapshot {
     pub ok: bool,
+    pub version: String,
     pub management_enabled: bool,
     pub drafts: Vec<DashboardDraft>,
     #[serde(skip_serializing_if = "Option::is_none")]
